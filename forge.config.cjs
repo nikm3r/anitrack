@@ -25,7 +25,12 @@ const config = {
     {
       name: "@electron-forge/maker-squirrel",
       platforms: ["win32"],
-      config: { name: "AniTrack", setupIcon: "./icon.ico" },
+      config: {
+        name: "AniTrack",
+        authors: "nikm3r",
+        description: "Anime tracking desktop app",
+        setupIcon: "./icon.ico",
+      },
     },
     {
       name: "@electron-forge/maker-zip",
