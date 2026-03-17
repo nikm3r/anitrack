@@ -14,7 +14,7 @@
     "publish": "npm run build && electron-forge publish"
   },
   "keywords": [],
-  "author": "",
+  "author": "nikm3r",
   "license": "MIT",
   "devDependencies": {
     "@electron-forge/cli": "^7.4.0",
@@ -23,8 +23,7 @@
     "@electron-forge/maker-rpm": "^7.4.0",
     "@electron-forge/maker-squirrel": "^7.4.0",
     "@electron-forge/maker-zip": "^7.4.0",
-    "@electron-forge/plugin-auto-unpack-natives": "^7.11.1",
-    "@electron-forge/plugin-vite": "^7.4.0",
+    "@electron/rebuild": "^3.6.0",
     "@tailwindcss/vite": "^4.0.0",
     "@types/better-sqlite3": "^7.6.12",
     "@types/cors": "^2.8.17",
@@ -42,7 +41,7 @@
     "wait-on": "^8.0.0"
   },
   "dependencies": {
-    "better-sqlite3": "^12.8.0",
+    "better-sqlite3": "11.10.0",
     "cors": "^2.8.5",
     "express": "^4.21.0",
     "lucide-react": "^0.577.0",

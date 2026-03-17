@@ -1,4 +1,5 @@
 const os = require("os");
+const fs = require("fs");
 
 /** @type {import('@electron-forge/shared-types').ForgeConfig} */
 const config = {
@@ -8,8 +9,9 @@ const config = {
     extraResource: [
       "./dist-server",
       "./node_modules/better-sqlite3",
-      "./node_modules/bindings",
-      "./node_modules/file-uri-to-path",
+      // bindings and file-uri-to-path only if they exist as top-level packages
+      ...(fs.existsSync("./node_modules/bindings") ? ["./node_modules/bindings"] : []),
+      ...(fs.existsSync("./node_modules/file-uri-to-path") ? ["./node_modules/file-uri-to-path"] : []),
     ],
     ignore: [
       /^\/src/,
@@ -47,14 +49,14 @@ const config = {
           productName: "AniTrack",
           description: "Anime tracking desktop app",
           maintainer: "nikm3r",
-          homepage: "https://github.com/nikm3r/anitrack",
+          homepage: "https://github.com/nikm3r/AniTrack",
           icon: "./icon.png",
           categories: ["Utility"],
           license: "MIT",
         },
       },
     },
-    ...(os.platform() === "linux" && require("fs").existsSync("/var/lib/rpm")
+    ...(os.platform() === "linux" && fs.existsSync("/var/lib/rpm")
       ? [{
           name: "@electron-forge/maker-rpm",
           platforms: ["linux"],
@@ -63,7 +65,7 @@ const config = {
               name: "anitrack",
               productName: "AniTrack",
               description: "Anime tracking desktop app",
-              homepage: "https://github.com/nikm3r/anitrack",
+              homepage: "https://github.com/nikm3r/AniTrack",
               icon: "./icon.png",
               categories: ["Utility"],
               license: "MIT",
