@@ -8,7 +8,7 @@ url="https://github.com/nikm3r/AniTrack"
 license=('MIT')
 depends=('gtk3' 'nss' 'alsa-lib' 'libxtst' 'libxss' 'libxrandr' 'mesa' 'libdrm')
 options=(!strip)
-source=("${pkgname}-${pkgver}.zip::https://github.com/nikm3r/AniTrack/releases/download/v${pkgver}/AniTrack-${pkgver}-linux-x64.zip")
+source=("${pkgname}-${pkgver}.zip::https://github.com/nikm3r/AniTrack/releases/download/v${pkgver}/anitrack-linux-x64-${pkgver}.zip")
 sha256sums=('SKIP')
 
 package() {
