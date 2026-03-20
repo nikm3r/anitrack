@@ -9,7 +9,7 @@ const config = {
       unpackDir: "{node_modules/better-sqlite3,node_modules/bindings,node_modules/file-uri-to-path}",
     },
     icon: "./icon",
-    extraResource: ["./resources/syncplay.lua"],
+    extraResource: ["./resources/syncplay.lua", "./icon.png"],
     ignore: [
       /^\/src/,
       /^\/server/,
