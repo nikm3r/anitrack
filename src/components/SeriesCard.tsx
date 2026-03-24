@@ -11,6 +11,7 @@ interface Props {
   onClick: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
   onUpdate: (updated: Partial<Anime> & { id: number }) => void;
+  onRemove?: (id: number) => void;
   language?: "romaji" | "english" | "native";
 }
 
@@ -21,12 +22,12 @@ function proxyUrl(url: string | null): string | null {
 
 export default function SeriesCard({
   anime, isSelected, isNowPlaying, nowPlayingEpisode,
-  onClick, onContextMenu, onUpdate, language = "romaji",
+  onClick, onContextMenu, onUpdate, onRemove, language = "romaji",
 }: Props) {
   const [imgError, setImgError] = useState(false);
   const [updating, setUpdating] = useState(false);
   const cover = imgError ? null : proxyUrl(anime.cover_image);
-  const pct = anime.total_episodes
+  const watchedPct = anime.total_episodes
     ? Math.min(100, Math.round((anime.progress / anime.total_episodes) * 100))
     : 0;
   const title =
@@ -79,10 +80,8 @@ export default function SeriesCard({
           </div>
         )}
 
-        {/* Gradient */}
         <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent" />
 
-        {/* Now Playing badge */}
         {isNowPlaying && (
           <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5 bg-emerald-500 text-black text-[9px] font-black px-2 py-1 rounded-full shadow-lg">
             <span className="relative flex h-1.5 w-1.5">
@@ -93,7 +92,6 @@ export default function SeriesCard({
           </div>
         )}
 
-        {/* Score badge */}
         {anime.score != null && anime.score > 0 && (
           <div className="absolute top-2.5 right-2.5 flex items-center gap-1 bg-black/75 backdrop-blur-sm text-amber-400 text-xs font-bold px-2 py-1 rounded-lg">
             <Star className="w-3 h-3 fill-current" />
@@ -101,31 +99,29 @@ export default function SeriesCard({
           </div>
         )}
 
-        {/* Format badge */}
         {anime.format && anime.format !== "TV" && (
           <div className="absolute bottom-14 right-2.5 text-[10px] font-bold text-zinc-400 bg-black/75 backdrop-blur-sm px-1.5 py-0.5 rounded-md">
             {anime.format.replace("_", " ")}
           </div>
         )}
 
-        {/* Progress + controls overlay at bottom of image */}
         <div className="absolute bottom-0 left-0 right-0 px-3 pb-2.5 pt-6">
-          {/* Episode progress text */}
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-[11px] text-zinc-400 font-medium">
               {anime.progress}{anime.total_episodes ? `/${anime.total_episodes}` : ""} ep
             </span>
-            {pct > 0 && (
-              <span className="text-[11px] text-zinc-500">{pct}%</span>
+            {watchedPct > 0 && (
+              <span className="text-[11px] text-zinc-500">{watchedPct}%</span>
             )}
           </div>
 
-          {/* Progress bar */}
+          {/* Dual bar: dim = all announced eps, bright = watched */}
           {anime.total_episodes != null && anime.total_episodes > 0 && (
-            <div className="h-1 bg-white/10 rounded-full overflow-hidden">
+            <div className="h-1 bg-white/10 rounded-full overflow-hidden relative">
+              <div className="absolute inset-0 bg-emerald-500/25 rounded-full" />
               <div
-                className="h-full bg-emerald-500 rounded-full transition-all duration-500"
-                style={{ width: `${pct}%` }}
+                className="absolute inset-y-0 left-0 bg-emerald-500 rounded-full transition-all duration-500"
+                style={{ width: `${watchedPct}%` }}
               />
             </div>
           )}
@@ -138,7 +134,6 @@ export default function SeriesCard({
           {title}
         </p>
 
-        {/* +/- episode controls */}
         <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
           <button
             onClick={e => changeProgress(e, -1)}
@@ -160,7 +155,6 @@ export default function SeriesCard({
         </div>
       </div>
 
-      {/* Selected ring */}
       {isSelected && (
         <div className="absolute inset-0 rounded-2xl ring-2 ring-emerald-500 pointer-events-none" />
       )}

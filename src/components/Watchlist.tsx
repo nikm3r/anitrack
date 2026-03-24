@@ -19,6 +19,7 @@ interface NowPlayingState {
 interface AnimeListHandle {
   anime: Anime[]; loading: boolean; error: string | null;
   reload: () => void; updateAnime: (id: number, updates: Partial<Anime>) => void;
+  removeAnime: (id: number) => void;
 }
 interface Props {
   onSearchRequest: (query: string) => void;
@@ -75,7 +76,7 @@ function buildRows(sorted: Anime[], groups: [string, Anime[]][] | null, cols: nu
 }
 
 export default function Watchlist({ animeList, settings, onSearchRequest }: Props) {
-  const { anime, loading, error, reload, updateAnime } = animeList;
+  const { anime, loading, error, reload, updateAnime, removeAnime } = animeList;
 
   const [activeCategory, setActiveCategory] = useState<AnimeStatus>("WATCHING");
   const [sortMode, setSortMode] = useState<SortMode>("season");
@@ -338,6 +339,7 @@ export default function Watchlist({ animeList, settings, onSearchRequest }: Prop
                             onClick={() => setSelectedAnime(prev => prev?.id === a.id ? null : a)}
                             onContextMenu={e => handleContextMenu(e, a)}
                             onUpdate={handleAnimeUpdate}
+                            onRemove={(id) => { removeAnime(id); if (selectedAnime?.id === id) setSelectedAnime(null); }}
                             language={settings?.language}
                           />
                         ))}
@@ -359,6 +361,7 @@ export default function Watchlist({ animeList, settings, onSearchRequest }: Prop
               onClose={() => setSelectedAnime(null)}
               onUpdate={handleAnimeUpdate}
               onContextMenu={e => handleContextMenu(e, selectedAnime)}
+              onRemove={(id) => { removeAnime(id); setSelectedAnime(null); }}
             />
           </div>
         )}
@@ -371,6 +374,7 @@ export default function Watchlist({ animeList, settings, onSearchRequest }: Prop
           anime={contextMenu.anime}
           onClose={() => setContextMenu(c => ({ ...c, visible: false }))}
           onUpdate={handleAnimeUpdate}
+          onRemove={(id) => { removeAnime(id); if (selectedAnime?.id === id) setSelectedAnime(null); }}
           settings={settings}
         />
       )}

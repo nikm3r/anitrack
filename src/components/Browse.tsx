@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
-import { Search, SlidersHorizontal, Plus, Check, ChevronLeft, ChevronRight, Trash2 } from "lucide-react";
+import { Search, SlidersHorizontal, Plus, Check, ChevronLeft, ChevronRight, Trash2, RefreshCw } from "lucide-react";
 import { api } from "../api";
 import type { Anime, AnimeStatus, AppSettings } from "../types/anime";
 import SeriesCard from "./SeriesCard";
@@ -80,7 +80,7 @@ const CARD_GAP = 16;
 // ─── Browse Card ──────────────────────────────────────────────────────────────
 
 function BrowseCard({
-  anime, isSelected, inLibrary, onClick, onAdd, onRemove, settings,
+  anime, isSelected, inLibrary, onClick, onAdd, onRemove, settings, onContextMenu,
 }: {
   anime: BrowseAnime;
   isSelected: boolean;
@@ -89,9 +89,9 @@ function BrowseCard({
   onAdd: (status: AnimeStatus) => void;
   onRemove?: () => void;
   settings?: AppSettings;
+  onContextMenu?: (e: React.MouseEvent) => void;
 }) {
   const [imgError, setImgError] = useState(false);
-  const [adding, setAdding] = useState(false);
   const cover = imgError ? null : proxyUrl(anime.cover_image);
   const title =
     settings?.language === "english" ? (anime.title_english || anime.title_romaji) :
@@ -100,6 +100,7 @@ function BrowseCard({
   return (
     <div
       onClick={onClick}
+      onContextMenu={onContextMenu}
       className={`
         relative group flex flex-col rounded-2xl overflow-hidden cursor-pointer
         transition-all duration-200 select-none
@@ -121,21 +122,16 @@ function BrowseCard({
         )}
         <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent" />
 
-        {/* Score badge */}
         {anime.average_score != null && anime.average_score > 0 && (
           <div className="absolute top-2.5 right-2.5 flex items-center gap-1 bg-black/75 backdrop-blur-sm text-amber-400 text-xs font-bold px-2 py-1 rounded-lg">
             {anime.average_score}%
           </div>
         )}
-
-        {/* Format badge */}
         {anime.format && anime.format !== "TV" && (
           <div className="absolute bottom-14 right-2.5 text-[10px] font-bold text-zinc-400 bg-black/75 backdrop-blur-sm px-1.5 py-0.5 rounded-md">
             {anime.format.replace("_", " ")}
           </div>
         )}
-
-        {/* Episode count */}
         <div className="absolute bottom-2 left-3">
           {anime.total_episodes && (
             <span className="text-[11px] text-zinc-400">{anime.total_episodes} ep</span>
@@ -209,7 +205,7 @@ function BrowseDetail({
   const displayDesc = truncated ? desc.slice(0, 200) + "…" : desc;
 
   const handleAdd = async (status: AnimeStatus) => {
-    if (inLibrary || adding) return;
+    if (adding) return;
     setAdding(true);
     try { await onAdd(status); } finally { setAdding(false); }
   };
@@ -260,33 +256,40 @@ function BrowseDetail({
           </div>
         </div>
 
-        {/* Add button */}
-        {inLibrary ? (
-          <button onClick={onRemove}
-            className="w-full py-2.5 rounded-xl text-sm font-medium flex items-center justify-center gap-2 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 hover:bg-red-500/10 hover:text-red-400 hover:border-red-500/20 transition-all group">
-            <Check className="w-4 h-4 group-hover:hidden" /><span className="group-hover:hidden">In Library</span>
-            <Trash2 className="w-4 h-4 hidden group-hover:block" /><span className="hidden group-hover:inline">Remove from Library</span>
-          </button>
-        ) : adding ? (
-          <div className="w-full py-2.5 rounded-xl flex items-center justify-center">
-            <div className="w-4 h-4 border border-emerald-500 border-t-transparent rounded-full animate-spin" />
-          </div>
-        ) : (
-          <div className="flex flex-col gap-2">
-            <p className="text-[10px] text-zinc-600 uppercase tracking-widest">Add to Library as…</p>
-            <div className="grid grid-cols-2 gap-1.5">
-              {(["PLANNING","WATCHING","COMPLETED","PAUSED","DROPPED"] as const).map(s => {
-                const labels: Record<string, string> = { PLANNING: "Planning", WATCHING: "Watching", COMPLETED: "Completed", PAUSED: "On Hold", DROPPED: "Dropped" };
+        {/* Status grid — same for in-library and not-in-library */}
+        <div>
+          <p className="text-[10px] text-zinc-600 uppercase tracking-widest mb-1.5">
+            {inLibrary ? "Status" : "Add to Library as…"}
+          </p>
+          {adding ? (
+            <div className="w-full py-2.5 rounded-xl flex items-center justify-center">
+              <div className="w-4 h-4 border border-emerald-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : (
+            <div className="grid gap-1" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
+              {(["WATCHING","COMPLETED","PLANNING","PAUSED","DROPPED"] as const).map(s => {
+                const labels: Record<string, string> = { WATCHING: "Watching", COMPLETED: "Completed", PLANNING: "Planning", PAUSED: "On Hold", DROPPED: "Dropped" };
+                const isActive = inLibrary && (anime as any).libraryStatus === s;
                 return (
                   <button key={s} onClick={() => handleAdd(s)}
-                    className="px-2 py-2 rounded-xl bg-white/5 hover:bg-emerald-500/15 text-zinc-400 hover:text-emerald-400 text-xs font-medium transition-all border border-white/5 hover:border-emerald-500/20">
+                    className={`px-2 py-2 rounded-xl text-xs font-medium transition-all ${
+                      isActive
+                        ? "bg-emerald-500/20 text-emerald-400 ring-1 ring-emerald-500/30"
+                        : "bg-white/5 text-zinc-400 hover:bg-emerald-500/15 hover:text-emerald-400"
+                    }`}>
                     {labels[s]}
                   </button>
                 );
               })}
+              <button
+                onClick={onRemove}
+                disabled={!inLibrary}
+                className="px-2 py-2 rounded-xl text-xs font-medium transition-all bg-white/5 text-red-400/60 hover:bg-red-500/10 hover:text-red-400 disabled:opacity-30">
+                Remove
+              </button>
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
         {/* Genres */}
         {anime.genres.length > 0 && (
@@ -349,6 +352,8 @@ export default function Browse({ animeList, settings, onAnimeAdded, onAnimeRemov
   const [error, setError] = useState<string | null>(null);
   const [selectedAnime, setSelectedAnime] = useState<BrowseAnime | null>(null);
   const [addingIds, setAddingIds] = useState<Set<number>>(new Set());
+  const [syncing, setSyncing] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ visible: boolean; x: number; y: number; anime: BrowseAnime | null }>({ visible: false, x: 0, y: 0, anime: null });
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(900);
@@ -416,8 +421,24 @@ export default function Browse({ animeList, settings, onAnimeAdded, onAnimeRemov
     setSeason(s); setYear(y); setSelectedAnime(null);
   };
 
+  // Change status of an already-in-library anime + push to AniList
+  const handleStatusChange = useCallback(async (anilistId: number, status: AnimeStatus) => {
+    const local = animeList.find(a => a.anilist_id === anilistId);
+    if (!local) return;
+    try {
+      await api.patch(`/api/anime/${local.id}`, { status });
+      await api.patch(`/api/anime/${local.id}/progress`, { progress: local.progress, status });
+    } catch (e) {
+      console.error("Failed to update status:", e);
+    }
+  }, [animeList]);
+
   const handleAdd = useCallback(async (anime: BrowseAnime, status: AnimeStatus) => {
-    if (libraryIds.has(anime.id)) return;
+    if (libraryIds.has(anime.id)) {
+      // Already in library — just update the status
+      await handleStatusChange(anime.id, status);
+      return;
+    }
     setAddingIds(prev => new Set(prev).add(anime.id));
     try {
       const added = await api.post<Anime>("/api/browse/add", { anilistId: anime.id, status });
@@ -427,10 +448,9 @@ export default function Browse({ animeList, settings, onAnimeAdded, onAnimeRemov
     } finally {
       setAddingIds(prev => { const s = new Set(prev); s.delete(anime.id); return s; });
     }
-  }, [libraryIds, onAnimeAdded]);
+  }, [libraryIds, onAnimeAdded, handleStatusChange]);
 
   const handleRemove = useCallback(async (anilistId: number) => {
-    // Find the local DB id
     const local = animeList.find(a => a.anilist_id === anilistId);
     if (!local) return;
     if (!confirm(`Remove "${local.title_romaji}" from library?`)) return;
@@ -442,8 +462,20 @@ export default function Browse({ animeList, settings, onAnimeAdded, onAnimeRemov
     }
   }, [animeList, onAnimeRemoved]);
 
-  const handleAnimeUpdate = useCallback((updated: Partial<Anime> & { id: number }) => {
-    // No-op for browse — we don't own these in local state
+  // Refresh — reimport full AniList library
+  const handleSync = async () => {
+    setSyncing(true);
+    try {
+      await api.post("/api/tracker/import-list", {});
+    } catch (e) { console.error("Sync failed", e); }
+    finally { setSyncing(false); }
+  };
+
+  // Close context menu on outside click
+  useEffect(() => {
+    const close = () => setContextMenu(c => ({ ...c, visible: false }));
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
   }, []);
 
   const SORT_OPTIONS: { key: SortMode; label: string }[] = [
@@ -470,6 +502,66 @@ export default function Browse({ animeList, settings, onAnimeAdded, onAnimeRemov
       .filter(({ top }) => top + cardHeight + CARD_GAP > scrollTop - 200 && top < scrollTop + viewHeight + 200);
   }, [rows, scrollTop, cardHeight]);
 
+  // Context menu for BrowseCards
+  const BrowseContextMenu = () => {
+    if (!contextMenu.visible || !contextMenu.anime) return null;
+    const a = contextMenu.anime;
+    const local = animeList.find(lib => lib.anilist_id === a.id);
+    const inLib = libraryIds.has(a.id);
+
+    const STATUS_OPTIONS: { value: AnimeStatus; label: string }[] = [
+      { value: "WATCHING",  label: "Watching" },
+      { value: "COMPLETED", label: "Completed" },
+      { value: "PLANNING",  label: "Planning" },
+      { value: "PAUSED",    label: "On Hold" },
+      { value: "DROPPED",   label: "Dropped" },
+    ];
+
+    return (
+      <>
+        <div className="fixed inset-0 z-[900]" onClick={() => setContextMenu(c => ({ ...c, visible: false }))} />
+        <div
+          className="fixed z-[901] w-52 bg-zinc-900 border border-white/10 rounded-xl shadow-2xl shadow-black/60 py-1.5"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={e => e.stopPropagation()}
+        >
+          <div className="px-4 py-2 mb-0.5">
+            <p className="text-[10px] font-bold text-zinc-600 uppercase tracking-widest truncate">
+              {a.title_english || a.title_romaji}
+            </p>
+          </div>
+          <div className="h-px bg-white/5 my-1" />
+          {STATUS_OPTIONS.map(opt => (
+            <button key={opt.value}
+              onClick={() => {
+                if (inLib) handleStatusChange(a.id, opt.value);
+                else handleAdd(a, opt.value);
+                setContextMenu(c => ({ ...c, visible: false }));
+              }}
+              className={`flex items-center justify-between w-full px-4 py-2 text-xs text-left transition-colors ${
+                inLib && local?.status === opt.value
+                  ? "text-emerald-400 bg-emerald-500/10"
+                  : "text-zinc-300 hover:bg-white/8"
+              }`}>
+              {opt.label}
+              {inLib && local?.status === opt.value && <span className="text-emerald-500">✓</span>}
+            </button>
+          ))}
+          {inLib && (
+            <>
+              <div className="h-px bg-white/5 my-1" />
+              <button
+                onClick={() => { handleRemove(a.id); setContextMenu(c => ({ ...c, visible: false })); }}
+                className="flex items-center gap-2 w-full px-4 py-2 text-xs text-red-400 hover:bg-red-500/10 transition-colors">
+                <Trash2 className="w-3.5 h-3.5" /> Remove from Library
+              </button>
+            </>
+          )}
+        </div>
+      </>
+    );
+  };
+
   return (
     <div className="flex flex-col h-full min-h-0">
 
@@ -491,6 +583,10 @@ export default function Browse({ animeList, settings, onAnimeAdded, onAnimeRemov
             </button>
           ))}
         </div>
+        <button onClick={handleSync} disabled={syncing} title="Sync from AniList"
+          className="w-10 h-10 rounded-xl bg-white/5 border border-white/8 flex items-center justify-center text-zinc-500 hover:text-zinc-300 transition-all disabled:opacity-40">
+          <RefreshCw className={`w-4 h-4 ${syncing ? "animate-spin" : ""}`} />
+        </button>
       </div>
 
       {/* Season selector */}
@@ -547,18 +643,25 @@ export default function Browse({ animeList, settings, onAnimeAdded, onAnimeRemov
                 {visibleRows.map(({ row, top, index }) => (
                   <div key={index} style={{ position: "absolute", top, left: 0, right: 0 }}>
                     <div className="grid" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: CARD_GAP, marginBottom: CARD_GAP }}>
-                      {row.map(a => (
-                        <BrowseCard
-                          key={a.id}
-                          anime={a}
-                          isSelected={selectedAnime?.id === a.id}
-                          inLibrary={libraryIds.has(a.id) || addingIds.has(a.id)}
-                          onClick={() => setSelectedAnime(prev => prev?.id === a.id ? null : a)}
-                          onAdd={(status) => handleAdd(a, status)}
-                          onRemove={() => handleRemove(a.id)}
-                          settings={settings}
-                        />
-                      ))}
+                      {row.map(a => {
+                        return (
+                          <BrowseCard
+                            key={a.id}
+                            anime={a}
+                            isSelected={selectedAnime?.id === a.id}
+                            inLibrary={libraryIds.has(a.id) || addingIds.has(a.id)}
+                            onClick={() => setSelectedAnime(prev => prev?.id === a.id ? null : a)}
+                            onAdd={(status) => handleAdd(a, status)}
+                            onRemove={() => handleRemove(a.id)}
+                            onContextMenu={e => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setContextMenu({ visible: true, x: e.clientX, y: e.clientY, anime: a });
+                            }}
+                            settings={settings}
+                          />
+                        );
+                      })}
                     </div>
                   </div>
                 ))}
@@ -581,6 +684,8 @@ export default function Browse({ animeList, settings, onAnimeAdded, onAnimeRemov
           </div>
         )}
       </div>
+
+      <BrowseContextMenu />
     </div>
   );
 }

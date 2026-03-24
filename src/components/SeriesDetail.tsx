@@ -14,12 +14,13 @@ interface Props {
   onClose: () => void;
   onUpdate: (updated: Partial<Anime> & { id: number }) => void;
   onContextMenu: (e: React.MouseEvent) => void;
+  onRemove?: (id: number) => void;
 }
 
 const STATUS_OPTIONS: { value: AnimeStatus; label: string }[] = [
-  { value: "WATCHING",  label: "Currently Watching" },
+  { value: "WATCHING",  label: "Watching" },
   { value: "COMPLETED", label: "Completed" },
-  { value: "PLANNING",  label: "Planning to Watch" },
+  { value: "PLANNING",  label: "Planning" },
   { value: "PAUSED",    label: "On Hold" },
   { value: "DROPPED",   label: "Dropped" },
 ];
@@ -29,7 +30,7 @@ function proxyUrl(url: string | null): string | null {
   return `http://localhost:3000/api/proxy-image?url=${encodeURIComponent(url)}`;
 }
 
-export default function SeriesDetail({ anime, settings, onClose, onUpdate, onContextMenu }: Props) {
+export default function SeriesDetail({ anime, settings, onClose, onUpdate, onContextMenu, onRemove }: Props) {
   const [syncing, setSyncing] = useState(false);
   const [savingStatus, setSavingStatus] = useState(false);
   const [savingProgress, setSavingProgress] = useState(false);
@@ -41,6 +42,7 @@ export default function SeriesDetail({ anime, settings, onClose, onUpdate, onCon
   const [editingScore, setEditingScore] = useState(false);
   const [scoreInput, setScoreInput] = useState(String(anime.score ?? ""));
   const [savingScore, setSavingScore] = useState(false);
+  const [removing, setRemoving] = useState(false);
 
   // Reset state when anime changes
   useEffect(() => {
@@ -119,7 +121,6 @@ export default function SeriesDetail({ anime, settings, onClose, onUpdate, onCon
     setSavingScore(true);
     try {
       await api.patch(`/api/anime/${anime.id}`, { score: rounded });
-      // Also push to AniList
       await api.patch(`/api/anime/${anime.id}/score`, { score: rounded });
       onUpdate({ id: anime.id, score: rounded });
       setScoreInput(String(rounded));
@@ -128,6 +129,20 @@ export default function SeriesDetail({ anime, settings, onClose, onUpdate, onCon
     } finally {
       setSavingScore(false);
       setEditingScore(false);
+    }
+  };
+
+  const handleRemove = async () => {
+    if (!confirm(`Remove "${anime.title_romaji}" from library?`)) return;
+    setRemoving(true);
+    try {
+      await api.delete(`/api/anime/${anime.id}`);
+      onRemove?.(anime.id);
+      onClose();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setRemoving(false);
     }
   };
 
@@ -339,17 +354,17 @@ export default function SeriesDetail({ anime, settings, onClose, onUpdate, onCon
         {/* Status selector */}
         <div>
           <p className="text-[10px] text-zinc-600 uppercase tracking-widest mb-1.5">Status</p>
-          <div className="flex flex-wrap gap-1">
+          <div className="grid gap-1" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
             {STATUS_OPTIONS.map(opt => (
               <button
                 key={opt.value}
                 onClick={() => handleStatusChange(opt.value)}
                 disabled={savingStatus}
                 className={`
-                  px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all
+                  px-2 py-2 rounded-xl text-[11px] font-medium transition-all
                   ${anime.status === opt.value
-                    ? "bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-500/30"
-                    : "bg-white/5 text-zinc-500 hover:text-zinc-300 hover:bg-white/8"
+                    ? "bg-emerald-500/20 text-emerald-400 ring-1 ring-emerald-500/30"
+                    : "bg-white/5 text-zinc-500 hover:bg-white/10 hover:text-zinc-300"
                   }
                 `}
               >
@@ -458,6 +473,18 @@ export default function SeriesDetail({ anime, settings, onClose, onUpdate, onCon
               View on AniList
             </a>
           )}
+
+          <button
+            onClick={handleRemove}
+            disabled={removing}
+            className="
+              flex items-center justify-center gap-2 w-full py-2 rounded-xl
+              bg-white/5 border border-red-500/20 text-red-400/70 text-xs font-medium
+              hover:bg-red-500/10 hover:text-red-400 transition-all disabled:opacity-40
+            "
+          >
+            Remove from Library
+          </button>
         </div>
       </div>
     </div>
