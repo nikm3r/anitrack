@@ -16,10 +16,12 @@ jobs:
       - run: npm ci
       - run: npx electron-rebuild -f -w better-sqlite3
       - run: npm run build
-      - name: Publish (creates GitHub Release + uploads artifacts + update metadata)
+      - name: Publish
         run: npx electron-forge publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Show produced artifacts
+        run: find out/make -type f | sort
 
   build-arch:
     runs-on: ubuntu-latest
