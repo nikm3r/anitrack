@@ -182,10 +182,11 @@ function BrowseCard({
 // Shows info for a BrowseAnime — simpler than SeriesDetail since it's not in library
 
 function BrowseDetail({
-  anime, inLibrary, onAdd, onRemove, onClose, settings,
+  anime, inLibrary, libraryAnime, onAdd, onRemove, onClose, settings,
 }: {
   anime: BrowseAnime;
   inLibrary: boolean;
+  libraryAnime?: Anime;
   onAdd: (status: AnimeStatus) => Promise<void>;
   onRemove: () => void;
   onClose: () => void;
@@ -256,7 +257,7 @@ function BrowseDetail({
           </div>
         </div>
 
-        {/* Status grid — same for in-library and not-in-library */}
+        {/* Status grid */}
         <div>
           <p className="text-[10px] text-zinc-600 uppercase tracking-widest mb-1.5">
             {inLibrary ? "Status" : "Add to Library as…"}
@@ -269,7 +270,7 @@ function BrowseDetail({
             <div className="grid gap-1" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
               {(["WATCHING","COMPLETED","PLANNING","PAUSED","DROPPED"] as const).map(s => {
                 const labels: Record<string, string> = { WATCHING: "Watching", COMPLETED: "Completed", PLANNING: "Planning", PAUSED: "On Hold", DROPPED: "Dropped" };
-                const isActive = inLibrary && (anime as any).libraryStatus === s;
+                const isActive = inLibrary && libraryAnime?.status === s;
                 return (
                   <button key={s} onClick={() => handleAdd(s)}
                     className={`px-2 py-2 rounded-xl text-xs font-medium transition-all ${
@@ -676,6 +677,7 @@ export default function Browse({ animeList, settings, onAnimeAdded, onAnimeRemov
             <BrowseDetail
               anime={selectedAnime}
               inLibrary={libraryIds.has(selectedAnime.id)}
+              libraryAnime={animeList.find(a => a.anilist_id === selectedAnime.id)}
               onAdd={(status) => handleAdd(selectedAnime, status)}
               onRemove={() => { handleRemove(selectedAnime.id); setSelectedAnime(null); }}
               onClose={() => setSelectedAnime(null)}

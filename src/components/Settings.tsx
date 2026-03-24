@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import {
   ShieldCheck, FolderOpen,
   Database, Languages, ExternalLink, CheckCircle2, AlertCircle,
-  RefreshCw, Save, Eye, EyeOff, Users,
+  RefreshCw, Save, Eye, EyeOff, Users, Download,
 } from "lucide-react";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
@@ -51,6 +51,28 @@ export function Settings({ settings, onSave, saving, onSyncComplete }: SettingsP
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+
+  // Auto-updater state
+  const [updateStatus, setUpdateStatus] = useState<
+    "idle" | "checking" | "available" | "not-available" | "downloading" | "ready" | "error"
+  >("idle");
+  const [updateVersion, setUpdateVersion] = useState<string | null>(null);
+  const [updateProgress, setUpdateProgress] = useState<number>(0);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const api = (window as any).electronAPI;
+    if (!api?.onUpdaterEvent) return;
+    const cleanup = api.onUpdaterEvent((event: string, data: any) => {
+      if (event === "updater:checking")      setUpdateStatus("checking");
+      if (event === "updater:available")     { setUpdateStatus("available"); setUpdateVersion(data?.version ?? null); }
+      if (event === "updater:not-available") setUpdateStatus("not-available");
+      if (event === "updater:progress")      { setUpdateStatus("downloading"); setUpdateProgress(data?.percent ?? 0); }
+      if (event === "updater:downloaded")    { setUpdateStatus("ready"); setUpdateVersion(data?.version ?? null); }
+      if (event === "updater:error")         { setUpdateStatus("error"); setUpdateError(data?.message ?? "Unknown error"); }
+    });
+    return cleanup;
+  }, []);
 
   useEffect(() => { setLocal(settings); }, [settings]);
 
@@ -309,6 +331,49 @@ export function Settings({ settings, onSave, saving, onSyncComplete }: SettingsP
               ))}
             </div>
           </div>
+        </Section>
+
+        {/* Updates */}
+        <Section icon={<Download className="w-5 h-5" />} title="Updates">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-zinc-300">App Version</p>
+              <p className="text-xs text-zinc-500 mt-0.5">
+                {updateStatus === "idle" && "Click to check for updates"}
+                {updateStatus === "checking" && "Checking for updates…"}
+                {updateStatus === "not-available" && "You're on the latest version"}
+                {updateStatus === "available" && `v${updateVersion} available — downloading…`}
+                {updateStatus === "downloading" && `Downloading… ${updateProgress}%`}
+                {updateStatus === "ready" && `v${updateVersion} ready — restart to install`}
+                {updateStatus === "error" && `Update error: ${updateError}`}
+              </p>
+            </div>
+            {updateStatus === "ready" ? (
+              <Button variant="primary" size="sm" icon={<Download className="w-3.5 h-3.5" />}
+                onClick={() => (window as any).electronAPI?.updaterInstall()}>
+                Restart &amp; Install
+              </Button>
+            ) : (
+              <Button variant="secondary" size="sm"
+                loading={updateStatus === "checking" || updateStatus === "downloading"}
+                icon={<RefreshCw className="w-3.5 h-3.5" />}
+                onClick={async () => {
+                  setUpdateStatus("checking");
+                  setUpdateError(null);
+                  const res = await (window as any).electronAPI?.updaterCheck();
+                  if (res?.error) { setUpdateStatus("error"); setUpdateError(res.error); }
+                }}
+                disabled={updateStatus === "checking" || updateStatus === "downloading"}>
+                Check for Updates
+              </Button>
+            )}
+          </div>
+          {updateStatus === "downloading" && (
+            <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+              <div className="h-full bg-emerald-500 rounded-full transition-all duration-300"
+                style={{ width: `${updateProgress}%` }} />
+            </div>
+          )}
         </Section>
 
         {/* Data Management */}

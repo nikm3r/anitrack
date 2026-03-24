@@ -22,6 +22,16 @@ const config = {
   },
   rebuildConfig: {},
   plugins: [],
+  publishers: [
+    {
+      name: "@electron-forge/publisher-github",
+      config: {
+        repository: { owner: "nikm3r", name: "AniTrack" },
+        prerelease: false,
+        draft: false,
+      },
+    },
+  ],
   makers: [
     {
       name: "@electron-forge/maker-squirrel",
