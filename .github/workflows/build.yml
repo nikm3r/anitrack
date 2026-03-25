@@ -29,6 +29,22 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install dependencies
         run: pacman -Syu --noconfirm && pacman -S --noconfirm base-devel curl git sudo
+      - name: Wait for AppImage to be available on GitHub Release
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          URL="https://github.com/nikm3r/AniTrack/releases/download/${GITHUB_REF_NAME}/anitrack-${VERSION}.AppImage"
+          echo "Waiting for: $URL"
+          for i in $(seq 1 30); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" -L "$URL")
+            if [ "$STATUS" = "200" ]; then
+              echo "AppImage is available"
+              exit 0
+            fi
+            echo "Attempt $i: got $STATUS, retrying in 20s..."
+            sleep 20
+          done
+          echo "Timed out waiting for AppImage"
+          exit 1
       - name: Create build user
         run: |
           useradd -m builder
