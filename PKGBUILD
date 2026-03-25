@@ -1,6 +1,6 @@
 # Maintainer: nikm3r <nmermigkas@gmail.com>
 pkgname=anitrack
-pkgver=0.4.8
+pkgver=0.4.9
 pkgrel=1
 pkgdesc="Anime tracking desktop app with AniList sync, torrent search and sync watch"
 arch=('x86_64')
@@ -13,16 +13,12 @@ sha256sums=('SKIP')
 
 package() {
   install -dm755 "${pkgdir}/opt/anitrack"
-
-  # Copy AppImage and make it executable
   install -Dm755 "${srcdir}/${pkgname}-${pkgver}.AppImage" \
     "${pkgdir}/opt/anitrack/anitrack"
 
-  # Symlink to /usr/bin
   install -dm755 "${pkgdir}/usr/bin"
   ln -sf "/opt/anitrack/anitrack" "${pkgdir}/usr/bin/anitrack"
 
-  # Desktop entry
   install -dm755 "${pkgdir}/usr/share/applications"
   cat > "${pkgdir}/usr/share/applications/anitrack.desktop" << DESKTOP
 [Desktop Entry]
