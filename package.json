@@ -15,7 +15,7 @@
     "publish": "npm run build && electron-builder build --publish always"
   },
   "keywords": [],
-  "author": "nikm3r",
+  "author": "nikm3r <nmermigkas@gmail.com>",
   "license": "MIT",
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",
