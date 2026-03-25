@@ -15,11 +15,17 @@ jobs:
           node-version: 22
       - run: npm ci
       - run: npm run build
-      - name: Build and publish
-        run: npx electron-builder build --linux AppImage deb --publish always
+      - name: Build
+        run: npx electron-builder build --linux AppImage deb
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EP_DRAFT: false
+      - name: Upload
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/*.AppImage
+            dist/*.deb
+            dist/latest-linux.yml
 
   build-arch:
     runs-on: ubuntu-latest
@@ -65,11 +71,16 @@ jobs:
           node-version: 22
       - run: npm ci
       - run: npm run build
-      - name: Build and publish
-        run: npx electron-builder build --win nsis --publish always
+      - name: Build
+        run: npx electron-builder build --win nsis
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EP_DRAFT: false
+      - name: Upload
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/*.exe
+            dist/latest.yml
 
   build-macos:
     runs-on: macos-latest
@@ -80,8 +91,14 @@ jobs:
           node-version: 22
       - run: npm ci
       - run: npm run build
-      - name: Build and publish
-        run: npx electron-builder build --mac dmg zip --publish always
+      - name: Build
+        run: npx electron-builder build --mac dmg zip
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EP_DRAFT: false
+      - name: Upload
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/*.dmg
+            dist/*.zip
+            dist/latest-mac.yml
