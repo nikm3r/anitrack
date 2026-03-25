@@ -30,13 +30,7 @@ const config = {
     releaseType: "release",
   },
 
-  // Linux — no snap, snapcraft not available on CI
   linux: {
-    target: [
-      { target: "AppImage", arch: ["x64"] },
-      { target: "deb",      arch: ["x64"] },
-      { target: "zip",      arch: ["x64"] },
-    ],
     icon: "icon.png",
     category: "AudioVideo",
     executableName: "anitrack",
@@ -48,12 +42,7 @@ const config = {
     homepage: "https://github.com/nikm3r/AniTrack",
   },
 
-  // Windows — use PNG, electron-builder converts it automatically
   win: {
-    target: [
-      { target: "nsis", arch: ["x64"] },
-      { target: "zip",  arch: ["x64"] },
-    ],
     icon: "icon.png",
     artifactName: "${name}-windows-x64-${version}.${ext}",
   },
@@ -61,14 +50,11 @@ const config = {
     oneClick: false,
     allowToChangeInstallationDirectory: true,
     shortcutName: "AniTrack",
+    installerIcon: "icon.png",
+    uninstallerIcon: "icon.png",
   },
 
-  // macOS
   mac: {
-    target: [
-      { target: "dmg", arch: ["x64", "arm64"] },
-      { target: "zip", arch: ["x64", "arm64"] },
-    ],
     icon: "icon.icns",
     artifactName: "${name}-mac-${arch}-${version}.${ext}",
   },
