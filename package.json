@@ -1,6 +1,6 @@
 {
   "name": "anitrack",
-  "version": "0.4.9",
+  "version": "0.4.10",
   "description": "Anime tracking desktop app",
   "main": "main.js",
   "scripts": {

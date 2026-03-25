@@ -1,6 +1,6 @@
 # Maintainer: nikm3r <nmermigkas@gmail.com>
 pkgname=anitrack
-pkgver=0.4.9
+pkgver=0.4.10
 pkgrel=1
 pkgdesc="Anime tracking desktop app with AniList sync, torrent search and sync watch"
 arch=('x86_64')

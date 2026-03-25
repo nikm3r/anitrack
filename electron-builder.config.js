@@ -28,7 +28,6 @@ const config = {
     owner: "nikm3r",
     repo: "AniTrack",
     releaseType: "release",
-    publishAutoUpdate: true,
   },
 
   linux: {
@@ -40,6 +39,8 @@ const config = {
     packageName: "anitrack",
     maintainer: "nikm3r <nmermigkas@gmail.com>",
     homepage: "https://github.com/nikm3r/AniTrack",
+    // Fix chrome-sandbox permissions after install
+    afterInstall: "build/after-install.sh",
   },
 
   win: {
