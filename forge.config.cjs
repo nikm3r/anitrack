@@ -22,16 +22,6 @@ const config = {
   },
   rebuildConfig: {},
   plugins: [],
-  publishers: [
-    {
-      name: "@electron-forge/publisher-github",
-      config: {
-        repository: { owner: "nikm3r", name: "AniTrack" },
-        prerelease: false,
-        draft: false,
-      },
-    },
-  ],
   makers: [
     {
       name: "@electron-forge/maker-squirrel",
@@ -90,7 +80,7 @@ const config = {
             name: "AniTrack",
             icon: "./icon.icns",
             overwrite: true,
-            format: "UDZO",  // ULFO causes hdiutil detach failures on GitHub Actions
+            format: "ULFO",
           },
         }]
       : []),
