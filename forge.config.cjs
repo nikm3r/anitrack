@@ -80,7 +80,7 @@ const config = {
             name: "AniTrack",
             icon: "./icon.icns",
             overwrite: true,
-            format: "ULFO",
+            format: "UDZO",
           },
         }]
       : []),

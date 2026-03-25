@@ -17,30 +17,9 @@ jobs:
       - run: npx electron-rebuild -f -w better-sqlite3
       - run: npm run build
       - run: npx electron-forge make
-      - name: Generate latest.yml for electron-updater
-        run: |
-          VERSION=${GITHUB_REF_NAME#v}
-          ZIP="out/make/zip/linux/x64/anitrack-linux-x64-${VERSION}.zip"
-          SHA512=$(sha512sum "$ZIP" | awk '{print $1}' | xxd -r -p | base64 -w0)
-          SIZE=$(stat -c%s "$ZIP")
-          cat > out/make/latest-linux.yml << YAML
-          version: ${VERSION}
-          files:
-            - url: anitrack-linux-x64-${VERSION}.zip
-              sha512: ${SHA512}
-              size: ${SIZE}
-          path: anitrack-linux-x64-${VERSION}.zip
-          sha512: ${SHA512}
-          releaseDate: '$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'
-          YAML
-      - name: Upload Linux artifacts
-        uses: softprops/action-gh-release@v1
+      - uses: softprops/action-gh-release@v1
         with:
-          files: |
-            out/make/**/*
-            out/make/latest-linux.yml
-          draft: false
-
+          files: out/make/**/*
   build-arch:
     runs-on: ubuntu-latest
     needs: build-linux
@@ -64,7 +43,6 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: /tmp/arch-build/*.pkg.tar.zst
-
   build-windows:
     runs-on: windows-latest
     steps:
@@ -76,32 +54,9 @@ jobs:
       - run: npx electron-rebuild -f -w better-sqlite3
       - run: npm run build
       - run: npx electron-forge make
-      - name: Generate latest.yml for electron-updater
-        shell: bash
-        run: |
-          VERSION=${GITHUB_REF_NAME#v}
-          ZIP=$(find out/make/zip/win32 -name "*.zip" | head -1)
-          SHA512=$(sha512sum "$ZIP" | awk '{print $1}' | xxd -r -p | base64 -w0)
-          SIZE=$(stat -c%s "$ZIP")
-          ZIPNAME=$(basename "$ZIP")
-          cat > out/make/latest.yml << YAML
-          version: ${VERSION}
-          files:
-            - url: ${ZIPNAME}
-              sha512: ${SHA512}
-              size: ${SIZE}
-          path: ${ZIPNAME}
-          sha512: ${SHA512}
-          releaseDate: '$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'
-          YAML
-      - name: Upload Windows artifacts
-        uses: softprops/action-gh-release@v1
+      - uses: softprops/action-gh-release@v1
         with:
-          files: |
-            out/make/**/*
-            out/make/latest.yml
-          draft: false
-
+          files: out/make/**/*
   build-macos:
     runs-on: macos-latest
     steps:
@@ -113,27 +68,6 @@ jobs:
       - run: npx electron-rebuild -f -w better-sqlite3
       - run: npm run build
       - run: npx electron-forge make
-      - name: Generate latest-mac.yml for electron-updater
-        run: |
-          VERSION=${GITHUB_REF_NAME#v}
-          ZIP=$(find out/make/zip/darwin -name "*.zip" | head -1)
-          SHA512=$(shasum -a 512 "$ZIP" | awk '{print $1}' | xxd -r -p | base64)
-          SIZE=$(stat -f%z "$ZIP")
-          ZIPNAME=$(basename "$ZIP")
-          cat > out/make/latest-mac.yml << YAML
-          version: ${VERSION}
-          files:
-            - url: ${ZIPNAME}
-              sha512: ${SHA512}
-              size: ${SIZE}
-          path: ${ZIPNAME}
-          sha512: ${SHA512}
-          releaseDate: '$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'
-          YAML
-      - name: Upload macOS artifacts
-        uses: softprops/action-gh-release@v1
+      - uses: softprops/action-gh-release@v1
         with:
-          files: |
-            out/make/**/*
-            out/make/latest-mac.yml
-          draft: false
+          files: out/make/**/*
