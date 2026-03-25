@@ -1,6 +1,6 @@
 # Maintainer: nikm3r <nmermigkas@gmail.com>
 pkgname=anitrack
-pkgver=0.4.6
+pkgver=0.4.7
 pkgrel=1
 pkgdesc="Anime tracking desktop app with AniList sync, torrent search and sync watch"
 arch=('x86_64')
@@ -8,11 +8,11 @@ url="https://github.com/nikm3r/AniTrack"
 license=('MIT')
 depends=('gtk3' 'nss' 'alsa-lib' 'libxtst' 'libxss' 'libxrandr' 'mesa' 'libdrm')
 options=(!strip)
-source=("${pkgname}-${pkgver}.zip::https://github.com/nikm3r/AniTrack/releases/download/v${pkgver}/anitrack-linux-x64-${pkgver}.zip")
+source=("${pkgname}-${pkgver}.zip::https://github.com/nikm3r/AniTrack/releases/download/v${pkgver}/anitrack-${pkgver}.zip")
 sha256sums=('SKIP')
 
 package() {
-  local srcdir_inner="${srcdir}/anitrack-linux-x64"
+  local srcdir_inner="${srcdir}/AniTrack-linux-x64"
 
   install -dm755 "${pkgdir}/opt/anitrack"
   cp -r "${srcdir_inner}/"* "${pkgdir}/opt/anitrack/"
