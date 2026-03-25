@@ -39,8 +39,7 @@ const config = {
     packageName: "anitrack",
     maintainer: "nikm3r <nmermigkas@gmail.com>",
     homepage: "https://github.com/nikm3r/AniTrack",
-    // Fix chrome-sandbox permissions after install
-    afterInstall: "build/after-install.sh",
+    fpm: ["--chmod", "4755:/opt/anitrack/chrome-sandbox"],
   },
 
   win: {
