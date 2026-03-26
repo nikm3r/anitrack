@@ -18,7 +18,7 @@ jobs:
       - run: npm run build
       - name: Build
         run: npx electron-builder build --linux AppImage deb --publish never
-      - name: Upload
+      - name: Create release and upload
         uses: softprops/action-gh-release@v1
         with:
           draft: false
@@ -57,7 +57,7 @@ jobs:
           cp PKGBUILD /tmp/arch-build/
           chown -R builder:builder /tmp/arch-build
           cd /tmp/arch-build && su builder -c "makepkg -s --noconfirm --skippgpcheck"
-      - name: Upload pkg
+      - name: Upload
         uses: softprops/action-gh-release@v1
         with:
           draft: false
@@ -65,6 +65,7 @@ jobs:
 
   build-windows:
     runs-on: windows-latest
+    needs: build-linux
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -86,6 +87,7 @@ jobs:
 
   build-macos:
     runs-on: macos-latest
+    needs: build-linux
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
