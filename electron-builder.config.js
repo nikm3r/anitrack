@@ -24,12 +24,6 @@ const config = {
     "node_modules/file-uri-to-path/**/*",
   ],
 
-  publish: {
-    provider: "github",
-    owner: "nikm3r",
-    repo: "AniTrack",
-    releaseType: "release",
-  },
 
   linux: {
     icon: "icon.png",

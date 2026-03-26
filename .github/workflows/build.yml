@@ -17,7 +17,7 @@ jobs:
       - run: npx electron-rebuild -f -w better-sqlite3
       - run: npm run build
       - name: Build
-        run: npx electron-builder build --linux AppImage deb
+        run: npx electron-builder build --linux AppImage deb --publish never
       - name: Upload
         uses: softprops/action-gh-release@v1
         with:
@@ -74,7 +74,7 @@ jobs:
       - run: npx electron-rebuild -f -w better-sqlite3
       - run: npm run build
       - name: Build
-        run: npx electron-builder build --win nsis zip
+        run: npx electron-builder build --win nsis zip --publish never
       - name: Upload
         uses: softprops/action-gh-release@v1
         with:
@@ -95,7 +95,7 @@ jobs:
       - run: npx electron-rebuild -f -w better-sqlite3
       - run: npm run build
       - name: Build
-        run: npx electron-builder build --mac dmg zip
+        run: npx electron-builder build --mac dmg zip --publish never
       - name: Upload
         uses: softprops/action-gh-release@v1
         with:
