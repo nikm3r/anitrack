@@ -24,7 +24,6 @@ const config = {
     "node_modules/file-uri-to-path/**/*",
   ],
 
-
   linux: {
     icon: "icon.png",
     category: "AudioVideo",
@@ -34,7 +33,7 @@ const config = {
     packageName: "anitrack",
     maintainer: "nikm3r <nmermigkas@gmail.com>",
     homepage: "https://github.com/nikm3r/AniTrack",
-    fpm: ["--chmod", "4755:/opt/anitrack/chrome-sandbox"],
+    afterInstall: "build/after-install.sh",
   },
 
   win: {
