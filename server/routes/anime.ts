@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import { getDb, touchUpdatedAt, type Anime } from "../db.js";
-import { AniListTracker } from "../tracker/anilist.js";
+import { enqueue } from "../syncQueue.js";
 
 const router = Router();
 
@@ -214,22 +214,12 @@ router.patch("/:id", (req: Request, res: Response) => {
     .prepare("SELECT * FROM anime WHERE id = ?")
     .get(id) as Anime;
 
-  // Push to AniList if status or progress changed
+  // Enqueue AniList sync if status or progress changed
   if (("status" in req.body || "progress" in req.body) && updated.anilist_id) {
-    const tokenRow = db
-      .prepare("SELECT value FROM settings WHERE key = 'anilist_token'")
-      .get() as { value: string } | undefined;
-    const autoUpdate = db
-      .prepare("SELECT value FROM settings WHERE key = 'auto_update_tracker'")
-      .get() as { value: string } | undefined;
-
-    if (tokenRow?.value && autoUpdate?.value !== "false") {
-      const tracker = new AniListTracker();
-      tracker
-        .updateProgress(tokenRow.value, String(updated.anilist_id), updated.progress, updated.status)
-        .then(() => console.log(`[anime] AniList status/progress updated: ${updated.title_romaji} -> ${updated.status} ep${updated.progress}`))
-        .catch((e) => console.error("[anime] AniList update failed:", e));
-    }
+    enqueue(db, updated.anilist_id, "progress", {
+      progress: updated.progress,
+      status: updated.status,
+    });
   }
 
   res.json({
@@ -257,7 +247,7 @@ router.delete("/:id", (req: Request, res: Response) => {
 
 // ─── PATCH /api/anime/:id/score ──────────────────────────────────────────────
 
-router.patch("/:id/score", async (req: Request, res: Response) => {
+router.patch("/:id/score", (req: Request, res: Response) => {
   const db = getDb();
   const id = parseInt(req.params.id, 10);
   const { score } = req.body;
@@ -273,16 +263,9 @@ router.patch("/:id/score", async (req: Request, res: Response) => {
   // Update local DB
   db.prepare("UPDATE anime SET score = ?, updated_at = datetime('now') WHERE id = ?").run(score, id);
 
-  // Push to AniList in background
+  // Enqueue AniList score sync
   if (anime.anilist_id) {
-    const tokenRow = db.prepare("SELECT value FROM settings WHERE key = 'anilist_token'").get() as { value: string } | undefined;
-    if (tokenRow?.value) {
-      const { AniListTracker } = await import("../tracker/anilist.js");
-      const tracker = new AniListTracker();
-      tracker.updateScore(tokenRow.value, String(anime.anilist_id), score)
-        .then(() => console.log(`[anime] Score synced to AniList: ${anime.title_romaji} -> ${score}`))
-        .catch(e => console.error("[anime] AniList score sync failed:", e));
-    }
+    enqueue(db, anime.anilist_id, "score", { score });
   }
 
   res.json({ ok: true, score });
@@ -331,22 +314,12 @@ router.patch("/:id/progress", (req: Request, res: Response) => {
     .prepare("SELECT * FROM anime WHERE id = ?")
     .get(id) as Anime;
 
-  // Push progress update to AniList in the background
+  // Enqueue AniList sync
   if (updated.anilist_id) {
-    const tokenRow = db
-      .prepare("SELECT value FROM settings WHERE key = 'anilist_token'")
-      .get() as { value: string } | undefined;
-    const autoUpdate = db
-      .prepare("SELECT value FROM settings WHERE key = 'auto_update_tracker'")
-      .get() as { value: string } | undefined;
-
-    if (tokenRow?.value && autoUpdate?.value !== "false") {
-      const tracker = new AniListTracker();
-      tracker
-        .updateProgress(tokenRow.value, String(updated.anilist_id), updated.progress, updated.status)
-        .then(() => console.log(`[anime] AniList updated: anime ${updated.anilist_id} -> ep ${updated.progress}`))
-        .catch((e) => console.error("[anime] AniList progress update failed:", e));
-    }
+    enqueue(db, updated.anilist_id, "progress", {
+      progress: updated.progress,
+      status: updated.status,
+    });
   }
 
   res.json({

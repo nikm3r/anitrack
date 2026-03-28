@@ -1,12 +1,16 @@
 import { Router, Request, Response } from "express";
 import { getDb } from "../db.js";
 import { AniListTracker } from "../tracker/anilist.js";
+import { enqueue } from "../syncQueue.js";
 
 const router = Router();
 const tracker = new AniListTracker();
 
+// ─── Season cache (in-memory, 6 hour TTL) ────────────────────────────────────
+const seasonCache = new Map<string, { data: any[]; fetchedAt: number }>();
+const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+
 // ─── GET /api/browse/season ───────────────────────────────────────────────────
-// Fetch anime airing in a specific season from AniList
 
 router.get("/season", async (req: Request, res: Response) => {
   const { season, year } = req.query;
@@ -28,17 +32,34 @@ router.get("/season", async (req: Request, res: Response) => {
     return;
   }
 
+  const cacheKey = `${String(season).toUpperCase()}-${yearNum}`;
+  const cached = seasonCache.get(cacheKey);
+
+  // Return cached data if still fresh
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+    console.log(`[browse] Serving cached season data for ${cacheKey}`);
+    res.json(cached.data);
+    return;
+  }
+
   try {
     const results = await tracker.getSeasonAnime(String(season).toUpperCase(), yearNum);
+    seasonCache.set(cacheKey, { data: results, fetchedAt: Date.now() });
+    console.log(`[browse] Fetched and cached ${results.length} titles for ${cacheKey}`);
     res.json(results);
   } catch (e) {
+    // If we have stale cache, return it rather than erroring
+    if (cached) {
+      console.warn(`[browse] AniList error, serving stale cache for ${cacheKey}`);
+      res.json(cached.data);
+      return;
+    }
     console.error("[browse] Season fetch failed:", e);
     res.status(500).json({ error: e instanceof Error ? e.message : "Failed to fetch season" });
   }
 });
 
 // ─── POST /api/browse/add ─────────────────────────────────────────────────────
-// Add an anime from browse to the local library
 
 router.post("/add", async (req: Request, res: Response) => {
   const { anilistId, status = 'PLANNING' } = req.body;
@@ -50,7 +71,6 @@ router.post("/add", async (req: Request, res: Response) => {
 
   const db = getDb();
 
-  // Check if already exists
   const existing = db.prepare("SELECT * FROM anime WHERE anilist_id = ?").get(anilistId);
   if (existing) {
     res.json(existing);
@@ -58,7 +78,6 @@ router.post("/add", async (req: Request, res: Response) => {
   }
 
   try {
-    // Fetch full details from AniList
     const detail = await tracker.getAnime(String(anilistId));
 
     const now = new Date().toISOString();
@@ -90,6 +109,10 @@ router.post("/add", async (req: Request, res: Response) => {
 
     const added = db.prepare("SELECT * FROM anime WHERE id = ?").get(result.lastInsertRowid);
     console.log(`[browse] Added anime: ${detail.titleRomaji}`);
+
+    // Enqueue AniList status sync
+    enqueue(db, Number(anilistId), "progress", { progress: 0, status });
+
     res.json(added);
   } catch (e) {
     console.error("[browse] Add failed:", e);

@@ -3,6 +3,7 @@ import { createServer } from "http";
 import { Server as SocketIOServer } from "socket.io";
 import cors from "cors";
 import path from "path";
+import { startQueueWorker, stopQueueWorker } from "./syncQueue.js";
 import { getDb } from "./db.js";
 import animeRouter from "./routes/anime.js";
 import syncRouter from "./routes/sync.js";
@@ -105,6 +106,7 @@ try { getDb(); } catch (err) {
   process.exit(1);
 }
 
+startQueueWorker(getDb());
 httpServer.listen(PORT, "127.0.0.1", () => {
   console.log(`[server] AniTrack running on http://127.0.0.1:${PORT}`);
 });

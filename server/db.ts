@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { migrateQueue } from "./syncQueue.js";
 import path from "path";
 import fs from "fs";
 
@@ -158,6 +159,9 @@ function migrate(db: Database.Database): void {
     db.exec(`INSERT OR REPLACE INTO schema_version (version) VALUES (2);`);
     console.log("[db] Migrated to schema v2");
   }
+
+  // Always ensure queue table exists
+  migrateQueue(db);
 }
 
 export function touchUpdatedAt(db: Database.Database, id: number): void {
