@@ -42,7 +42,7 @@ const config = {
   win: {
     icon: "icon.png",
     // Consistent naming so latest.yml matches the actual file
-    artifactName: "anitrack.Setup.${version}.${ext}",
+    artifactName: "anitrack-Setup-${version}.${ext}",
   },
   nsis: {
     oneClick: false,
