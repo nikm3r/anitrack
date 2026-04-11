@@ -23,6 +23,7 @@ import type {
 // until we get fewer results than the requested limit.
 
 const MAL_BASE = "https://api.myanimelist.net/v2";
+export const MAL_CLIENT_ID = "440f4a036c2f7b88b5f458454e49a3c0";
 const MAL_CLIENT_ID_HEADER = "X-MAL-CLIENT-ID";
 
 // Standard fields requested for all anime queries
