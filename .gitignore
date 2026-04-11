@@ -1,0 +1,10 @@
+node_modules/
+out/
+dist/
+dist-server/
+*.asar
+.env
+pkg/
+src/anitrack-linux-x64/
+*.zip
+*.pkg.tar.zst
