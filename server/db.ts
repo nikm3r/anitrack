@@ -235,6 +235,16 @@ function migrate(db: Database.Database): void {
     }
   }
 
+  if (current < 4) {
+    // Drop old sync_queue (had anilist_id column) — migrateQueue will recreate with tracker_id
+    try {
+      db.exec(`DROP TABLE IF EXISTS sync_queue;`);
+      db.exec(`DROP INDEX IF EXISTS idx_sync_queue_tracker;`);
+    } catch {}
+    db.exec(`INSERT OR REPLACE INTO schema_version (version) VALUES (4);`);
+    console.log("[db] Migrated to schema v4 - rebuilt sync_queue");
+  }
+
   // Always ensure queue table exists and is up to date
   migrateQueue(db);
 }
