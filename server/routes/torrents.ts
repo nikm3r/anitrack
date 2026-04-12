@@ -1,5 +1,5 @@
 import { Router, Request, Response } from "express";
-import { execFile } from "child_process";
+import { exec } from "child_process";
 import { getDb } from "../db.js";
 import path from "path";
 import fs from "fs";
@@ -31,7 +31,9 @@ router.get("/search", async (req: Request, res: Response) => {
     const results = data.map((item: any) => ({
       title: item.title ?? "Unknown",
       link: item.magnet_uri || item.torrent_url || null,
-      size: item.total_size ? formatSize(item.total_size) : "Unknown",
+      size: item.total_size
+        ? formatSize(item.total_size)
+        : "Unknown",
       seeders: item.seeders ?? 0,
       leechers: item.leechers ?? 0,
     })).filter((r: any) => r.link);
@@ -55,19 +57,15 @@ router.post("/download", (req: Request, res: Response) => {
     return;
   }
 
-  // Validate that link looks like a magnet URI or http(s) URL — reject anything else
-  if (!link.startsWith("magnet:") && !link.startsWith("http://") && !link.startsWith("https://")) {
-    res.status(400).json({ error: "link must be a magnet URI or http(s) URL" });
-    return;
-  }
-
   const db = getDb();
 
+  // Get base folder from settings
   const baseRow = db
     .prepare("SELECT value FROM settings WHERE key = 'base_folder'")
     .get() as { value: string } | undefined;
   const baseFolder = baseRow?.value ?? "";
 
+  // Get per-series override path if animeId provided
   let savePath: string;
   if (animeId) {
     const animeRow = db
@@ -86,40 +84,46 @@ router.post("/download", (req: Request, res: Response) => {
       : sanitizeFolderName(titleRomaji);
   }
 
+  // Ensure save directory exists
   if (savePath && !fs.existsSync(savePath)) {
     try { fs.mkdirSync(savePath, { recursive: true }); } catch { /* ignore */ }
   }
 
+  // Get torrent client path from settings
   const clientRow = db
     .prepare("SELECT value FROM settings WHERE key = 'torrent_client_path'")
     .get() as { value: string } | undefined;
   const clientPath = clientRow?.value?.trim() ?? "";
 
   if (clientPath) {
-    if (!fs.existsSync(clientPath)) {
-      res.status(400).json({ error: "Configured torrent client not found" });
-      return;
+    // Silent injection into torrent client
+    const isQbt = clientPath.toLowerCase().includes("qbittorrent");
+    let command: string;
+
+    if (isQbt) {
+      command = `"${clientPath}" --save-path="${savePath}" --skip-dialog=true "${link}"`;
+    } else {
+      // Generic client (Transmission, Deluge, etc.) — just pass the link
+      command = `"${clientPath}" "${link}"`;
     }
 
-    const isQbt = clientPath.toLowerCase().includes("qbittorrent");
-
-    // FIX: Use execFile() with an args array — never interpolates into a shell string,
-    //      so link/savePath cannot inject shell commands.
-    const args = isQbt
-      ? ["--save-path", savePath, "--skip-dialog=true", link]
-      : [link];
-
-    execFile(clientPath, args, (err) => {
+    exec(command, (err) => {
       if (err) console.error("[torrents] Client launch error:", err.message);
     });
 
     res.json({ success: true, method: "client", savePath });
   } else {
-    // No client configured — emit to frontend via socket so it can call
-    // shell.openExternal() from the renderer (safe, no shell injection risk).
-    // We pass the link back and let the frontend open it.
-    // FIX: Previously used exec(`start "${link}"`) which was injectable.
-    res.json({ success: true, method: "system", savePath: null, openLink: link });
+    // No client configured — open with system default magnet handler
+    const opener =
+      process.platform === "win32" ? "start" :
+      process.platform === "darwin" ? "open" :
+      "xdg-open";
+
+    exec(`${opener} "${link}"`, (err) => {
+      if (err) console.error("[torrents] System open error:", err.message);
+    });
+
+    res.json({ success: true, method: "system", savePath: null });
   }
 });
 
