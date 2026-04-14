@@ -6,6 +6,7 @@ import os from "os";
 import { getDb } from "../db.js";
 import {
   setActivePlayer, clearActivePlayer, getController, installVlcLua, MpvController,
+  signalVlcReady, initVlcReadyPromise,
 } from "../sync/playerController.js";
 import { io } from "../index.js";
 
@@ -103,20 +104,36 @@ function findPlayer(): {
   //      Previously the port was embedded in the args string and then
   //      re-parsed via regex (error-prone if path/title contained port="NNNN").
   const vlcPort = 10000 + Math.floor(Math.random() * 45000);
+  // Build the lua-config exactly as syncplay does on Windows:
+  // modulepath with escaped quotes, port with escaped quotes, lua-config last.
+  const vlcExeDir = (() => {
+    if (customPath && fs.existsSync(customPath) && fs.statSync(customPath).isFile()) {
+      return path.dirname(customPath).replace(/\\/g, "/");
+    }
+    return ((process.env["ProgramFiles"] || "C:\\Program Files") + "\\VideoLAN\\VLC").replace(/\\/g, "/");
+  })();
+  const vlcModulePath = `${vlcExeDir}/lua/intf/modules/?.luac`;
+
   const vlcArgs = (f: string, forSync: boolean) => {
+    // Match syncplay args exactly. File is NOT passed as arg — we send it
+    // via load-file command through the lua interface after connecting.
     const args = [
       "--extraintf=luaintf",
       "--lua-intf=syncplay",
-      `--lua-config=syncplay={port="${vlcPort}"}`,
       "--no-quiet",
       "--no-input-fast-seek",
+      "--play-and-pause",
+      "--start-time=0",
+      "--no-one-instance",
+      "--no-one-instance-when-started-from-file",
+      `--lua-config=syncplay={modulepath=\"${vlcModulePath}\",port=\"${vlcPort}\"}`,
     ];
-    if (forSync) args.push("--start-paused");
-    args.push(f);
+    // Do NOT pass the file as an arg — match syncplay exactly.
+    // File will be sent via load-file command after lua interface connects.
     return args;
   };
 
-  if (customPath && fs.existsSync(customPath)) {
+  if (customPath && fs.existsSync(customPath) && fs.statSync(customPath).isFile()) {
     const isVlc = customPath.toLowerCase().includes("vlc");
     return isVlc
       ? { exe: customPath, args: vlcArgs, type: "vlc", vlcPort }
@@ -203,7 +220,9 @@ router.post("/launch", async (req: Request, res: Response) => {
   if (player.type === "vlc") {
     const resourcesPath = (process as any).resourcesPath || path.join(process.cwd(), "resources");
     const installed = installVlcLua(resourcesPath, player.exe);
-    console.log(`[playback] VLC lua install: ${installed ? "ok" : "failed"} (src: ${resourcesPath}, exe: ${player.exe})`);
+    console.log(`[playback] VLC lua install: ${installed ? "ok" : "failed"}`);
+    // Set up the ready promise BEFORE spawning so we don't miss the signal
+    initVlcReadyPromise();
   }
 
   const episode = guessEpisode(filePath, anime.total_episodes);
@@ -211,11 +230,48 @@ router.post("/launch", async (req: Request, res: Response) => {
 
   let proc: ChildProcess | null = null;
   try {
-    proc = spawn(player.exe, player.args(filePath, forSync), { detached: true, stdio: "ignore" });
-    proc.unref();
+    if (player.type === "vlc") {
+      // Syncplay pattern: spawn with stderr piped so we can read it.
+      // We wait for "Hosting Syncplay interface on port" before connecting.
+      // On Windows syncplay uses stdio:pipe too; on others it reads stderr.
+      proc = spawn(player.exe, player.args(filePath, forSync), {
+        detached: false,
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+
+      // Syncplay pattern: on Windows VLC doesn't reliably write to stderr,
+      // so signal ready after a short delay and let the retry loop handle it.
+      // On Linux/macOS read stderr for "Hosting Syncplay" before connecting.
+      if (process.platform === "win32") {
+        setTimeout(() => signalVlcReady(), 1500);
+      } else {
+        const stderr = (proc as any).stderr;
+        if (stderr) {
+          let stderrBuf = "";
+          stderr.on("data", (chunk: Buffer) => {
+            stderrBuf += chunk.toString();
+            const lines = stderrBuf.split("\n");
+            stderrBuf = lines.pop() || "";
+            for (const line of lines) {
+              if (line.includes("Hosting Syncplay") || line.includes("Listening on host")) {
+                signalVlcReady();
+              }
+            }
+          });
+          stderr.on("close", () => { signalVlcReady(); });
+        } else {
+          setTimeout(() => signalVlcReady(), 2000);
+        }
+      }
+
+      proc.unref();
+    } else {
+      proc = spawn(player.exe, player.args(filePath, forSync), { detached: true, stdio: "ignore" });
+      proc.unref();
+    }
+
     proc.on("error", (err) => {
       console.error(`[playback] Player spawn error: ${err.message}`);
-      clearSession();
     });
   } catch (e) {
     res.status(500).json({ error: `Failed to launch player: ${e instanceof Error ? e.message : String(e)}` });
@@ -223,7 +279,7 @@ router.post("/launch", async (req: Request, res: Response) => {
   }
 
   // FIX: Pass vlcPort directly from the player object — no more regex parsing from args string.
-  setActivePlayer(player.type, player.vlcPort);
+  setActivePlayer(player.type, player.vlcPort, player.type === "vlc" ? filePath : undefined);
 
   session = {
     animeId, episode, filePath, forSync,
@@ -262,6 +318,8 @@ router.post("/launch", async (req: Request, res: Response) => {
         } catch {}
         io.emit("progress:updated", { animeId, episode: currentEp, progress: newProgress });
         console.log(`[playback] Tracked anime ${animeId} ep ${currentEp} -> progress ${newProgress}`);
+      } else {
+        console.warn(`[playback] Could not determine episode number from filename: "${path.basename(filePath)}" — progress not tracked`);
       }
       session.tracked = true;
       session.secondsRemaining = 0;
