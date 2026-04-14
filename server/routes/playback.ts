@@ -128,8 +128,10 @@ function findPlayer(): {
       "--no-one-instance-when-started-from-file",
       `--lua-config=syncplay={modulepath=\"${vlcModulePath}\",port=\"${vlcPort}\"}`,
     ];
-    // Do NOT pass the file as an arg — match syncplay exactly.
-    // File will be sent via load-file command after lua interface connects.
+    // Always pass the file as an arg so it opens immediately.
+    // The lua interface will also send load-file after connecting, which is harmless.
+    if (forSync) args.push("--start-paused");
+    args.push(f);
     return args;
   };
 
@@ -264,7 +266,8 @@ router.post("/launch", async (req: Request, res: Response) => {
         }
       }
 
-      proc.unref();
+      // Do NOT call proc.unref() for VLC — we need the close event to fire
+      // so we can cancel the tracking timer if the user closes early.
     } else {
       proc = spawn(player.exe, player.args(filePath, forSync), { detached: true, stdio: "ignore" });
       proc.unref();
@@ -302,7 +305,10 @@ router.post("/launch", async (req: Request, res: Response) => {
     try {
       const currentEp = session.episode;
       if (currentEp != null) {
-        const newProgress = Math.max(anime.progress, currentEp);
+        // Re-fetch current progress in case it changed since launch
+        const freshAnime = db.prepare("SELECT progress FROM anime WHERE id = ?").get(animeId) as { progress: number } | undefined;
+        const currentProgress = freshAnime?.progress ?? anime.progress;
+        const newProgress = Math.max(currentProgress, currentEp);
         const port = process.env.SERVER_PORT || 3000;
         await fetch(`http://localhost:${port}/api/anime/${animeId}/progress`, {
           method: "PATCH",
@@ -328,10 +334,34 @@ router.post("/launch", async (req: Request, res: Response) => {
     }
   }, trackAfterMs);
 
+  // On Windows, VLC spawns a child GUI process and our proc handle may exit
+  // immediately (launcher pattern), so proc.on("close") fires at 0s even though
+  // VLC is still open. Instead, poll for the process to actually disappear.
+  const pollExit = () => {
+    if (!session || session.animeId !== animeId) return;
+    const alive = (() => {
+      try { proc!.kill(0); return true; } catch { return false; }
+    })();
+    if (!alive) {
+      const elapsed = Date.now() - session.startedAt;
+      if (elapsed < trackAfterMs) {
+        console.log(`[playback] Player closed after ${Math.round(elapsed / 1000)}s (threshold ${Math.round(trackAfterMs / 1000)}s) — not tracking`);
+        clearSession();
+      } else {
+        const clearDelay = Math.max(trackAfterMs + 3000, 10_000);
+        setTimeout(() => { if (session?.animeId === animeId) clearSession(); }, clearDelay);
+      }
+      return;
+    }
+    setTimeout(pollExit, 2000);
+  };
+
   proc.on("close", () => {
-    const clearDelay = Math.max(trackAfterMs + 3000, 10_000);
-    setTimeout(() => { if (session?.animeId === animeId) clearSession(); }, clearDelay);
+    // close event may fire early on Windows (launcher pattern) — use pollExit instead
+    setTimeout(pollExit, 2000);
   });
+  // Also start polling immediately in case close never fires (unref'd process)
+  setTimeout(pollExit, 3000);
 
   res.json({ launched: true, player: player.exe, playerType: player.type, animeId, episode, filePath, trackAfterSecs: trackingDelaySecs });
 });

@@ -290,7 +290,11 @@ export function setActivePlayer(type: "mpv" | "vlc", port?: number, filePath?: s
   if (type === "vlc" && port) vlcPort = port;
   if (type === "vlc" && filePath) vlcFilePath = filePath;
   activeController = null;
-  _gaveUp = false;
+  _connectingPromise = null;
+  // For VLC, block getController() until signalVlcReady() fires.
+  // This prevents the retry loop from exhausting itself before VLC is ready.
+  _gaveUp = type === "vlc";
+  console.log(`[vlc] setActivePlayer: type=${type}, port=${port}, waiting for lua ready signal`);
 }
 
 export function clearActivePlayer() {
@@ -307,6 +311,8 @@ export function clearActivePlayer() {
 // Syncplay pattern: don't attempt TCP connect until the lua interface says it's listening.
 export function signalVlcReady() {
   console.log("[vlc] lua interface ready — attempting connection");
+  _connectingPromise = null;
+  _gaveUp = false; // now allow getController() to connect
   _vlcReadyResolve?.();
 }
 
@@ -321,7 +327,11 @@ let _gaveUp = false;
 
 export async function getController(): Promise<IPlayerController | null> {
   if (activeController?.isConnected()) return activeController;
-  if (!activePlayerType || _gaveUp) return null;
+  if (!activePlayerType) return null;
+  if (_gaveUp) {
+    // Only log once
+    return null;
+  }
   if (_connectingPromise) return _connectingPromise;
   _connectingPromise = _doConnect().finally(() => { _connectingPromise = null; });
   return _connectingPromise;
@@ -337,10 +347,11 @@ async function _doConnect(): Promise<IPlayerController | null> {
     }
 
     if (activePlayerType === "vlc" && vlcPort) {
-      // Wait for lua interface ready signal before attempting TCP connect
-      if (_vlcReadyPromise) await _vlcReadyPromise;
-
       // Syncplay VLCClientFactory: initialDelay=0.3s, maxDelay=0.45s, maxRetries=50
+      // We do NOT wait for the ready promise here — signalVlcReady() resets
+      // _connectingPromise so a fresh _doConnect starts after the signal fires.
+      // This avoids the race where _doConnect is suspended inside _connectingPromise
+      // and can't be restarted when the signal arrives.
       console.log(`[vlc] Attempting to connect on port ${vlcPort}...`);
       const MAX_RETRIES = 50;
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -364,6 +375,10 @@ async function _doConnect(): Promise<IPlayerController | null> {
       }
       console.error(`[vlc] Failed to connect after ${MAX_RETRIES} attempts on port ${vlcPort} — giving up until next launch`);
       _gaveUp = true;
+      // Emit an event so playback.ts can relaunch with file as direct arg
+      if (vlcFilePath) {
+        console.warn(`[vlc] lua interface failed — file was not loaded. User should close and reopen.`);
+      }
     }
   } catch {
     activeController = null;

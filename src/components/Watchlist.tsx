@@ -244,7 +244,13 @@ export default function Watchlist({ animeList, settings, onSearchRequest }: Prop
       {nowPlaying.animeId && nowPlayingAnime && (
         <NowPlaying anime={nowPlayingAnime} episode={nowPlaying.episode}
           secondsRemaining={nowPlaying.secondsRemaining}
-          onDismiss={() => setNowPlaying({ animeId: null, episode: null, secondsRemaining: 0, filePath: null })} />
+          onDismiss={async () => {
+            try {
+              await fetch("http://localhost:3000/api/playback/stop", { method: "POST" });
+              await fetch("http://localhost:3000/api/sync/leave", { method: "POST" });
+            } catch {}
+            setNowPlaying({ animeId: null, episode: null, secondsRemaining: 0, filePath: null });
+          }} />
       )}
 
       {/* Header */}

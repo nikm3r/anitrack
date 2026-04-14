@@ -285,7 +285,8 @@ export class SyncEngine {
     }
 
     // Pause/unpause from remote (syncplay's _serverPaused / _serverUnpaused)
-    if (pauseChanged) {
+    // Only apply if the change was made by someone else
+    if (pauseChanged && setBy !== this.username) {
       console.log(`[sync] Remote ${paused ? "pause" : "play"} by ${setBy}`);
       this._commandSetPaused(paused);
     }
