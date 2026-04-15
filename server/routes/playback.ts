@@ -237,37 +237,13 @@ router.post("/launch", async (req: Request, res: Response) => {
       // We wait for "Hosting Syncplay interface on port" before connecting.
       // On Windows syncplay uses stdio:pipe too; on others it reads stderr.
       proc = spawn(player.exe, player.args(filePath, forSync), {
-        detached: false,
-        stdio: ["ignore", "ignore", "pipe"],
+        detached: true,
+        stdio: "ignore",
       });
+      proc.unref();
 
-      // Syncplay pattern: on Windows VLC doesn't reliably write to stderr,
-      // so signal ready after a short delay and let the retry loop handle it.
-      // On Linux/macOS read stderr for "Hosting Syncplay" before connecting.
-      if (process.platform === "win32") {
-        setTimeout(() => signalVlcReady(), 1500);
-      } else {
-        const stderr = (proc as any).stderr;
-        if (stderr) {
-          let stderrBuf = "";
-          stderr.on("data", (chunk: Buffer) => {
-            stderrBuf += chunk.toString();
-            const lines = stderrBuf.split("\n");
-            stderrBuf = lines.pop() || "";
-            for (const line of lines) {
-              if (line.includes("Hosting Syncplay") || line.includes("Listening on host")) {
-                signalVlcReady();
-              }
-            }
-          });
-          stderr.on("close", () => { signalVlcReady(); });
-        } else {
-          setTimeout(() => signalVlcReady(), 2000);
-        }
-      }
-
-      // Do NOT call proc.unref() for VLC — we need the close event to fire
-      // so we can cancel the tracking timer if the user closes early.
+      // Signal VLC ready after a delay to allow lua interface to start
+      setTimeout(() => signalVlcReady(), 1500);
     } else {
       proc = spawn(player.exe, player.args(filePath, forSync), { detached: true, stdio: "ignore" });
       proc.unref();
@@ -305,10 +281,7 @@ router.post("/launch", async (req: Request, res: Response) => {
     try {
       const currentEp = session.episode;
       if (currentEp != null) {
-        // Re-fetch current progress in case it changed since launch
-        const freshAnime = db.prepare("SELECT progress FROM anime WHERE id = ?").get(animeId) as { progress: number } | undefined;
-        const currentProgress = freshAnime?.progress ?? anime.progress;
-        const newProgress = Math.max(currentProgress, currentEp);
+        const newProgress = Math.max(anime.progress, currentEp);
         const port = process.env.SERVER_PORT || 3000;
         await fetch(`http://localhost:${port}/api/anime/${animeId}/progress`, {
           method: "PATCH",
@@ -334,34 +307,19 @@ router.post("/launch", async (req: Request, res: Response) => {
     }
   }, trackAfterMs);
 
-  // On Windows, VLC spawns a child GUI process and our proc handle may exit
-  // immediately (launcher pattern), so proc.on("close") fires at 0s even though
-  // VLC is still open. Instead, poll for the process to actually disappear.
-  const pollExit = () => {
-    if (!session || session.animeId !== animeId) return;
-    const alive = (() => {
-      try { proc!.kill(0); return true; } catch { return false; }
-    })();
-    if (!alive) {
-      const elapsed = Date.now() - session.startedAt;
-      if (elapsed < trackAfterMs) {
-        console.log(`[playback] Player closed after ${Math.round(elapsed / 1000)}s (threshold ${Math.round(trackAfterMs / 1000)}s) — not tracking`);
-        clearSession();
-      } else {
-        const clearDelay = Math.max(trackAfterMs + 3000, 10_000);
-        setTimeout(() => { if (session?.animeId === animeId) clearSession(); }, clearDelay);
-      }
-      return;
-    }
-    setTimeout(pollExit, 2000);
-  };
-
   proc.on("close", () => {
-    // close event may fire early on Windows (launcher pattern) — use pollExit instead
-    setTimeout(pollExit, 2000);
+    if (!session || session.animeId !== animeId) return;
+    const elapsed = Date.now() - session.startedAt;
+    if (elapsed < trackAfterMs) {
+      // Player closed before tracking threshold — cancel the timer
+      console.log(`[playback] Player closed after ${Math.round(elapsed / 1000)}s (threshold ${Math.round(trackAfterMs / 1000)}s) — not tracking`);
+      clearSession();
+    } else {
+      // Already past the threshold — let the timer fire naturally then clean up
+      const clearDelay = Math.max(trackAfterMs + 3000, 10_000);
+      setTimeout(() => { if (session?.animeId === animeId) clearSession(); }, clearDelay);
+    }
   });
-  // Also start polling immediately in case close never fires (unref'd process)
-  setTimeout(pollExit, 3000);
 
   res.json({ launched: true, player: player.exe, playerType: player.type, animeId, episode, filePath, trackAfterSecs: trackingDelaySecs });
 });
