@@ -371,4 +371,25 @@ export class AniListTracker implements ITracker {
       description: m.description ?? null,
     }));
   }
+
+  async deleteEntry(token: string, mediaId: string): Promise<void> {
+    // First get the mediaListEntry id for this media
+    const getIdQuery = `
+      query ($mediaId: Int) {
+        Media(id: $mediaId) {
+          mediaListEntry { id }
+        }
+      }`;
+    const data = await gql<{ Media: { mediaListEntry: { id: number } | null } }>(
+      getIdQuery, { mediaId: parseInt(mediaId, 10) }, token
+    );
+    const entryId = data.Media?.mediaListEntry?.id;
+    if (!entryId) return; // Not on list, nothing to delete
+    const mutation = `
+      mutation ($id: Int) {
+        DeleteMediaListEntry(id: $id) { deleted }
+      }`;
+    await gql(mutation, { id: entryId }, token);
+    console.log(`[anilist] Deleted media list entry for media ${mediaId}`);
+  }
 }

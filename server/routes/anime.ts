@@ -183,12 +183,32 @@ router.patch("/:id", (req: Request, res: Response) => {
 
 // ─── DELETE /api/anime/:id ────────────────────────────────────────────────────
 
-router.delete("/:id", (req: Request, res: Response) => {
+router.delete("/:id", async (req: Request, res: Response) => {
   const db = getDb();
-  const result = db.prepare("DELETE FROM anime WHERE id = ?").run(req.params.id);
+  const id = parseInt(req.params.id, 10);
+  const anime = db.prepare("SELECT * FROM anime WHERE id = ?").get(id) as any;
+  if (!anime) { res.status(404).json({ error: "Not found" }); return; }
 
-  if (result.changes === 0) { res.status(404).json({ error: "Not found" }); return; }
+  // Remove from tracker first
+  try {
+    const settings = Object.fromEntries(
+      (db.prepare("SELECT key, value FROM settings").all() as any[]).map((r: any) => [r.key, r.value])
+    );
+    const activeTracker = settings["active_tracker"] || "anilist";
+    const token = settings[`${activeTracker}_token`];
+    const mediaId = activeTracker === "anilist" ? anime.anilist_id : anime.mal_id;
+    if (token && mediaId) {
+      const { AniListTracker } = await import("../tracker/anilist.js");
+      const { MALTracker } = await import("../tracker/mal.js");
+      const tracker = activeTracker === "anilist" ? new AniListTracker() : new MALTracker();
+      await tracker.deleteEntry(token, String(mediaId));
+    }
+  } catch (e) {
+    console.error("[anime] Failed to delete from tracker:", e);
+    // Continue with local delete even if tracker fails
+  }
 
+  db.prepare("DELETE FROM anime WHERE id = ?").run(id);
   res.status(204).send();
 });
 

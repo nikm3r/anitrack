@@ -16,6 +16,7 @@ import playbackRouter from "./routes/playback.js";
 import torrentsRouter from "./routes/torrents.js";
 import browseRouter from "./routes/browse.js";
 import malAuthRouter from "./routes/mal-auth.js";
+import scheduleRouter from "./routes/schedule.js";
 
 const IS_PROD = process.env.NODE_ENV === "production";
 const PORT = parseInt(process.env.SERVER_PORT ?? "3000", 10);
@@ -69,6 +70,7 @@ app.use("/api/playback", playbackRouter);
 app.use("/api/torrents", torrentsRouter);
 app.use("/api/browse", browseRouter);
 app.use("/api/mal", malAuthRouter);
+app.use("/api/schedule", scheduleRouter);
 
 app.use("/api/*", (_req, res) => {
   res.status(404).json({ error: "API route not found" });

@@ -348,6 +348,14 @@ export class MALTracker implements ITracker {
 
   // ─── Private helpers ────────────────────────────────────────────────────────
 
+  async deleteEntry(token: string, mediaId: string): Promise<void> {
+    await fetch(`https://api.myanimelist.net/v2/anime/${mediaId}/my_list_status`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    console.log(`[mal] Deleted list entry for media ${mediaId}`);
+  }
+
   private _toSearchResult(m: MalAnime): TrackerSearchResult {
     return {
       id: String(m.id),

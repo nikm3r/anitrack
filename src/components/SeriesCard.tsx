@@ -130,7 +130,7 @@ export default function SeriesCard({
 
       {/* Info strip */}
       <div className="bg-zinc-900/95 px-3 py-2.5 flex flex-col gap-2">
-        <p className="text-xs font-semibold text-zinc-200 leading-snug line-clamp-2 min-h-[2.5rem]">
+        <p className="text-sm font-semibold text-zinc-200 leading-snug line-clamp-2 min-h-[2.5rem]">
           {title}
         </p>
 

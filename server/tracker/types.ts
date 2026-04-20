@@ -58,4 +58,5 @@ export interface ITracker {
   getUserList(token: string): Promise<TrackerUserListEntry[]>;
   updateProgress(token: string, mediaId: string, progress: number, status: string): Promise<void>;
   updateScore(token: string, mediaId: string, score: number): Promise<void>;
+  deleteEntry(token: string, mediaId: string): Promise<void>;
 }

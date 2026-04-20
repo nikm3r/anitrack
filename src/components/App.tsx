@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from "react";
-import { Monitor, Search, Users, Settings as SettingsIcon, Tv, Compass } from "lucide-react";
+import { Monitor, Search, Users, Settings as SettingsIcon, Tv, Compass, CalendarDays } from "lucide-react";
 import { Settings } from "./Settings";
 import { useSettings } from "../hooks/useSettings";
 import { useAnimeList } from "../hooks/useAnimeList";
@@ -7,8 +7,11 @@ import Watchlist from "./Watchlist";
 import TorrentSearch from "./TorrentSearch";
 import SyncWatch from "./SyncWatch";
 import Browse from "./Browse";
+import Schedule from "./Schedule";
 
-type Tab = "watchlist" | "search" | "browse" | "sync" | "settings";
+type Tab = "schedule" | "watchlist" | "search" | "browse" | "sync" | "settings";
+
+const isMac = typeof window !== "undefined" && (window as any).electronAPI?.platform === "darwin";
 
 function NavItem({ active, icon, label, onClick }: {
   active: boolean; icon: React.ReactNode; label: string; onClick: () => void;
@@ -43,80 +46,108 @@ export default function App() {
   }, []);
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#0a0a0f]">
+    <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#0a0a0f]">
 
-      {/* Sidebar */}
-      <nav className="w-20 h-full flex-shrink-0 bg-[#0d0d14] border-r border-white/5 flex flex-col items-center py-6 gap-3 drag z-40">
-        <div className="w-10 h-10 bg-emerald-500 rounded-2xl flex items-center justify-center shadow-lg shadow-emerald-500/20 mb-4 flex-shrink-0 no-drag">
-          <Tv className="w-5 h-5 text-black" />
-        </div>
+      {/* Title bar — full width, drag region, shows traffic lights on macOS */}
+      <div className={`
+        flex-shrink-0 flex items-center justify-center
+        bg-[#0d0d14] border-b border-white/5
+        drag select-none
+        ${isMac ? "h-10" : "h-8"}
+      `}>
+        <span className="text-xs font-semibold text-zinc-500 tracking-widest uppercase no-drag pointer-events-none">
+          AniTrack
+        </span>
+      </div>
 
-        <div className="flex flex-col items-center gap-2 flex-1 no-drag">
-          <NavItem active={activeTab === "watchlist"} icon={<Monitor className="w-5 h-5" />} label="Watchlist"       onClick={() => setActiveTab("watchlist")} />
-          <NavItem active={activeTab === "search"}    icon={<Search className="w-5 h-5" />}  label="Search Torrents" onClick={() => setActiveTab("search")} />
-          <NavItem active={activeTab === "browse"}    icon={<Compass className="w-5 h-5" />} label="Browse"           onClick={() => setActiveTab("browse")} />
-          <NavItem active={activeTab === "sync"}      icon={<Users className="w-5 h-5" />}   label="Sync Watch"      onClick={() => setActiveTab("sync")} />
-        </div>
+      {/* Body */}
+      <div className="flex flex-1 min-h-0 overflow-hidden">
 
-        <div className="no-drag">
-          <NavItem active={activeTab === "settings"} icon={<SettingsIcon className="w-5 h-5" />} label="Settings" onClick={() => setActiveTab("settings")} />
-        </div>
-      </nav>
-
-      {/* Main content */}
-      <main className="flex-1 min-w-0 h-full overflow-hidden flex flex-col">
-        <div className="flex-1 min-h-0 px-8 py-8 overflow-hidden flex flex-col">
-
-          {/* Watchlist — always mounted */}
-          <div className={`flex-1 min-h-0 flex flex-col ${activeTab === "watchlist" ? "" : "hidden"}`}>
-            <Watchlist
-              animeList={animeList}
-              settings={settings}
-              onSearchRequest={handleSearchRequest}
-            />
+        {/* Sidebar */}
+        <nav className="w-20 h-full flex-shrink-0 bg-[#0d0d14] border-r border-white/5 flex flex-col items-center py-6 gap-3 drag z-40">
+          <div className="w-10 h-10 bg-emerald-500 rounded-2xl flex items-center justify-center shadow-lg shadow-emerald-500/20 mb-4 flex-shrink-0 no-drag">
+            <Tv className="w-5 h-5 text-black" />
           </div>
 
-          {/* Torrent Search — always mounted */}
-          <div className={`flex-1 min-h-0 flex flex-col ${activeTab === "search" ? "" : "hidden"}`}>
-            <TorrentSearch
-              anime={animeList.anime}
-              pendingSearch={pendingSearch}
-              onPendingSearchConsumed={() => setPendingSearch(null)}
-            />
+          <div className="flex flex-col items-center gap-2 flex-1 no-drag">
+            <NavItem active={activeTab === "schedule"}  icon={<CalendarDays className="w-5 h-5" />} label="Schedule"        onClick={() => setActiveTab("schedule")} />
+            <NavItem active={activeTab === "watchlist"} icon={<Monitor className="w-5 h-5" />}     label="Watchlist"        onClick={() => setActiveTab("watchlist")} />
+            <NavItem active={activeTab === "search"}    icon={<Search className="w-5 h-5" />}      label="Search Torrents"  onClick={() => setActiveTab("search")} />
+            <NavItem active={activeTab === "browse"}    icon={<Compass className="w-5 h-5" />}     label="Browse"           onClick={() => setActiveTab("browse")} />
+            <NavItem active={activeTab === "sync"}      icon={<Users className="w-5 h-5" />}       label="Sync Watch"       onClick={() => setActiveTab("sync")} />
           </div>
 
-          {/* Sync Watch — always mounted to preserve room state */}
-          <div className={`flex-1 min-h-0 flex flex-col ${activeTab === "sync" ? "" : "hidden"}`}>
-            <SyncWatch
-              anime={animeList.anime}
-              settings={settings}
-            />
+          <div className="no-drag">
+            <NavItem active={activeTab === "settings"} icon={<SettingsIcon className="w-5 h-5" />} label="Settings" onClick={() => setActiveTab("settings")} />
           </div>
+        </nav>
 
-          {/* Browse — always mounted */}
-          <div className={`flex-1 min-h-0 flex flex-col ${activeTab === "browse" ? "" : "hidden"}`}>
-            <Browse
-              animeList={animeList.anime}
-              settings={settings}
-              onAnimeAdded={(anime) => animeList.addAnime(anime)}
-              onAnimeRemoved={(id) => animeList.removeAnime(id)}
-            />
-          </div>
+        {/* Main content */}
+        <main className="flex-1 min-w-0 h-full overflow-hidden flex flex-col">
+          <div className="flex-1 min-h-0 px-8 py-8 overflow-hidden flex flex-col">
 
-          {/* Settings */}
-          {activeTab === "settings" && (
-            <div className="flex-1 min-h-0 flex flex-col">
-              {settingsLoading ? (
-                <div className="flex items-center justify-center h-64">
-                  <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-                </div>
-              ) : (
-                <Settings settings={settings} onSave={save} saving={saving} onSyncComplete={animeList.reload} />
-              )}
+            {/* Schedule */}
+            <div className={`flex-1 min-h-0 flex flex-col ${activeTab === "schedule" ? "" : "hidden"}`}>
+              <Schedule
+                animeList={animeList.anime}
+                settings={settings}
+                onSearchRequest={handleSearchRequest}
+                onUpdate={(updated) => { const { id, ...rest } = updated; animeList.updateAnime(id, rest); }}
+                onRemove={(id) => animeList.removeAnime(id)}
+              />
             </div>
-          )}
-        </div>
-      </main>
+
+            {/* Watchlist — always mounted */}
+            <div className={`flex-1 min-h-0 flex flex-col ${activeTab === "watchlist" ? "" : "hidden"}`}>
+              <Watchlist
+                animeList={animeList}
+                settings={settings}
+                onSearchRequest={handleSearchRequest}
+              />
+            </div>
+
+            {/* Torrent Search — always mounted */}
+            <div className={`flex-1 min-h-0 flex flex-col ${activeTab === "search" ? "" : "hidden"}`}>
+              <TorrentSearch
+                anime={animeList.anime}
+                pendingSearch={pendingSearch}
+                onPendingSearchConsumed={() => setPendingSearch(null)}
+              />
+            </div>
+
+            {/* Sync Watch — always mounted to preserve room state */}
+            <div className={`flex-1 min-h-0 flex flex-col ${activeTab === "sync" ? "" : "hidden"}`}>
+              <SyncWatch
+                anime={animeList.anime}
+                settings={settings}
+              />
+            </div>
+
+            {/* Browse — always mounted */}
+            <div className={`flex-1 min-h-0 flex flex-col ${activeTab === "browse" ? "" : "hidden"}`}>
+              <Browse
+                animeList={animeList.anime}
+                settings={settings}
+                onAnimeAdded={(anime) => animeList.addAnime(anime)}
+                onAnimeRemoved={(id) => animeList.removeAnime(id)}
+              />
+            </div>
+
+            {/* Settings */}
+            {activeTab === "settings" && (
+              <div className="flex-1 min-h-0 flex flex-col">
+                {settingsLoading ? (
+                  <div className="flex items-center justify-center h-64">
+                    <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                  </div>
+                ) : (
+                  <Settings settings={settings} onSave={save} saving={saving} onSyncComplete={animeList.reload} />
+                )}
+              </div>
+            )}
+          </div>
+        </main>
+      </div>
     </div>
   );
 }
