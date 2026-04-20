@@ -4,8 +4,7 @@ import { getDb } from "../db.js";
 const router = Router();
 
 const ANILIST_API = "https://graphql.anilist.co";
-const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-const timetableCache = new Map<string, { data: any; fetchedAt: number }>();
+
 
 
 
@@ -51,14 +50,13 @@ router.get("/", async (req: Request, res: Response) => {
 
   // Use weekParam directly as mondayStr — frontend sends correct Monday in YYYY-MM-DD
   // Compute UTC Unix timestamps for the full week
-  const mondayStr = weekParam || new Date().toISOString().slice(0, 10);
-  const cacheKey = `${mondayStr}_${timezone}`;
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const mondayStr = weekParam || todayStr;
 
-  const cached = timetableCache.get(cacheKey);
-  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
-    res.json(cached.data);
-    return;
-  }
+
+
 
   const db = getDb();
   const animeRows = db.prepare(
@@ -128,9 +126,7 @@ router.get("/", async (req: Request, res: Response) => {
     // Sort each day by air time
     for (const d of DAYS) result[d].sort((a, b) => (a.subTime || "").localeCompare(b.subTime || ""));
 
-    const responseData = { week: mondayStr, days: result };
-    timetableCache.set(cacheKey, { data: responseData, fetchedAt: Date.now() });
-    res.json(responseData);
+    res.json({ week: mondayStr, days: result });
   } catch (err) {
     console.error("[schedule] Error:", err);
     res.status(500).json({ error: "Failed to fetch schedule" });

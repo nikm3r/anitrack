@@ -1,6 +1,8 @@
 import { Router, Request, Response } from "express";
 import { getDb, touchUpdatedAt, type Anime } from "../db.js";
 import { enqueue } from "../syncQueue.js";
+import { AniListTracker } from "../tracker/anilist.js";
+import { MALTracker } from "../tracker/mal.js";
 
 const router = Router();
 
@@ -198,8 +200,6 @@ router.delete("/:id", async (req: Request, res: Response) => {
     const token = settings[`${activeTracker}_token`];
     const mediaId = activeTracker === "anilist" ? anime.anilist_id : anime.mal_id;
     if (token && mediaId) {
-      const { AniListTracker } = await import("../tracker/anilist.js");
-      const { MALTracker } = await import("../tracker/mal.js");
       const tracker = activeTracker === "anilist" ? new AniListTracker() : new MALTracker();
       await tracker.deleteEntry(token, String(mediaId));
     }
@@ -209,6 +209,8 @@ router.delete("/:id", async (req: Request, res: Response) => {
   }
 
   db.prepare("DELETE FROM anime WHERE id = ?").run(id);
+  // Clear schedule cache so next fetch doesn't return stale data
+  
   res.status(204).send();
 });
 

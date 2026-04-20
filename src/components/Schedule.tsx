@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, RefreshCw } from "lucide-react";
 import type { Anime } from "../types/anime";
 import ContextMenu from "./ContextMenu";
 
@@ -174,7 +174,10 @@ export default function Schedule({ settings, onSearchRequest, onUpdate, onRemove
             <ChevronRight className="w-3.5 h-3.5" />
           </button>
         </div>
-        {loading && <Loader2 className="w-4 h-4 text-zinc-600 animate-spin" />}
+        <button onClick={() => fetchSchedule(currentMonday)}
+          className="w-7 h-7 rounded-lg bg-white/5 border border-white/8 flex items-center justify-center text-zinc-400 hover:text-zinc-200 hover:bg-white/10 transition-all">
+          {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+        </button>
         {!loading && scheduleData && <span className="text-xs text-zinc-600">{totalShows} shows</span>}
       </div>
 
@@ -239,7 +242,7 @@ export default function Schedule({ settings, onSearchRequest, onUpdate, onRemove
           onUpdate={(updated) => { onUpdate(updated); closeMenu(); }}
           onRemove={(id) => {
             onRemove?.(id);
-            // Remove from local schedule data immediately without waiting for server
+            // Remove from local state immediately
             setScheduleData(prev => {
               if (!prev) return prev;
               const days = { ...prev.days };
@@ -248,6 +251,7 @@ export default function Schedule({ settings, onSearchRequest, onUpdate, onRemove
               }
               return { ...prev, days };
             });
+
           }}
           onSearchRequest={(q) => { onSearchRequest(q); closeMenu(); }}
           settings={settings}
