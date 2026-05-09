@@ -524,6 +524,35 @@ export function Settings({ settings, onSave, saving, onSyncComplete }: SettingsP
             onChange={(e) => set("torrent_client_path", e.target.value)}
             placeholder="/usr/bin/qbittorrent" mono
             hint="Leave empty to use system default magnet handler" />
+          <Divider />
+          <div className="flex flex-col gap-2">
+            <label className="text-xs font-bold uppercase tracking-wider text-zinc-500">Torrent Search Source</label>
+            <div className="flex rounded-xl overflow-hidden border border-white/8 bg-white/3">
+              {([
+                { label: "Nyaa", value: "https://nyaa.si/?page=rss&c=1_2&f=0&q=%title%" },
+                { label: "Nyaa (trusted)", value: "https://nyaa.si/?page=rss&c=1_2&f=2&q=%title%" },
+                { label: "Tokyo Toshokan", value: "https://www.tokyotosho.info/rss.php?terms=%title%&type=1" },
+                { label: "Custom", value: "custom" },
+              ] as { label: string; value: string }[]).map(({ label, value }) => {
+                const presets = ["https://nyaa.si/?page=rss&c=1_2&f=0&q=%title%", "https://nyaa.si/?page=rss&c=1_2&f=2&q=%title%", "https://www.tokyotosho.info/rss.php?terms=%title%&type=1"];
+                const currentUrl = local.torrent_rss_url ?? "https://nyaa.si/?page=rss&c=1_2&f=0&q=%title%";
+                const isCustom = !presets.includes(currentUrl);
+                const isActive = value === "custom" ? isCustom : currentUrl === value;
+                return (
+                  <button key={value} onClick={() => {
+                    if (value !== "custom") set("torrent_rss_url", value);
+                  }}
+                    className={`flex-1 py-2 text-xs font-bold uppercase transition-all ${isActive ? "bg-emerald-500 text-black" : "text-zinc-500 hover:text-zinc-300"}`}>
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            <Input label="" value={local.torrent_rss_url ?? "https://nyaa.si/?page=rss&c=1_2&f=0&q=%title%"}
+              onChange={(e) => set("torrent_rss_url", e.target.value)}
+              placeholder="https://nyaa.si/?page=rss&c=1_2&f=0&q=%title%" mono
+              hint="Use %title% as the search query placeholder" />
+          </div>
         </Section>
 
         {/* ── Sync Watch ── */}

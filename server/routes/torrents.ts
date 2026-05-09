@@ -15,28 +15,35 @@ router.get("/search", async (req: Request, res: Response) => {
     return;
   }
 
-  try {
-    const url = `https://feed.animetosho.org/json?qx=1&q=${encodeURIComponent(q.trim())}`;
-    const response = await fetch(url, {
-      headers: { "User-Agent": "AniTrack/1.0" },
-    });
+  const db = getDb();
+  const rssRow = db.prepare("SELECT value FROM settings WHERE key = 'torrent_rss_url'").get() as { value: string } | undefined;
+  const rssTemplate = rssRow?.value || "https://nyaa.si/?page=rss&c=1_2&f=0&q=%title%";
+  const rssUrl = rssTemplate.replace("%title%", encodeURIComponent(q.trim()));
 
+  try {
+    const response = await fetch(rssUrl, { headers: { "User-Agent": "AniTrack/1.0" } });
     if (!response.ok) {
-      res.status(response.status).json({ error: "AnimeTosho returned an error" });
+      res.status(response.status).json({ error: "Torrent source returned an error" });
       return;
     }
 
-    const data = await response.json() as any[];
-
-    const results = data.map((item: any) => ({
-      title: item.title ?? "Unknown",
-      link: item.magnet_uri || item.torrent_url || null,
-      size: item.total_size
-        ? formatSize(item.total_size)
-        : "Unknown",
-      seeders: item.seeders ?? 0,
-      leechers: item.leechers ?? 0,
-    })).filter((r: any) => r.link);
+    const text = await response.text();
+    const items = text.match(/<item>([\s\S]*?)<\/item>/g) || [];
+    const results = items.map((item: string) => {
+      const title = item.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/)?.[1]
+        || item.match(/<title>(.*?)<\/title>/)?.[1]
+        || "Unknown";
+      const link = item.match(/<nyaa:magnetUri>(.*?)<\/nyaa:magnetUri>/)?.[1]
+        || item.match(/<enclosure[^>]+url="([^"]+)"/)?.[1]
+        || item.match(/<link>(.*?)<\/link>/)?.[1]
+        || null;
+      const size = item.match(/<nyaa:size>(.*?)<\/nyaa:size>/)?.[1]
+        || item.match(/<contentLength>(.*?)<\/contentLength>/)?.[1]
+        || "Unknown";
+      const seeders = parseInt(item.match(/<nyaa:seeders>(.*?)<\/nyaa:seeders>/)?.[1] || "0");
+      const leechers = parseInt(item.match(/<nyaa:leechers>(.*?)<\/nyaa:leechers>/)?.[1] || "0");
+      return { title, link, size, seeders, leechers };
+    }).filter((r: any) => r.link);
 
     res.json({ data: results });
   } catch (err: unknown) {
