@@ -244,14 +244,20 @@ export default function Schedule({ settings, onSearchRequest, onUpdate, onRemove
             setScheduleData(prev => {
               if (!prev) return prev;
               const days = { ...prev.days };
-              const watchingStatuses = ["CURRENT", "REPEATING"];
+              const watchingStatuses = ["WATCHING"];
               for (const day of Object.keys(days)) {
                 days[day] = days[day]
                   .map((item: ScheduleItem) => {
                     if (item.libraryAnime.id !== updated.id) return item;
                     return { ...item, libraryAnime: { ...item.libraryAnime, ...updated } };
                   })
-                  .filter((item: ScheduleItem) => watchingStatuses.includes(item.libraryAnime.status));
+                  .filter((item: ScheduleItem) => {
+                    // Only filter out if THIS item was updated and its new status is non-watching
+                    if (item.libraryAnime.id === updated.id && updated.status) {
+                      return watchingStatuses.includes(updated.status);
+                    }
+                    return true;
+                  });
               }
               return { ...prev, days };
             });
