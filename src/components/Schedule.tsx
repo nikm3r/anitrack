@@ -239,10 +239,26 @@ export default function Schedule({ settings, onSearchRequest, onUpdate, onRemove
           x={contextMenu.x} y={contextMenu.y}
           anime={contextMenu.anime}
           onClose={closeMenu}
-          onUpdate={(updated) => { onUpdate(updated); closeMenu(); }}
+          onUpdate={(updated) => {
+            onUpdate(updated);
+            setScheduleData(prev => {
+              if (!prev) return prev;
+              const days = { ...prev.days };
+              const watchingStatuses = ["CURRENT", "REPEATING"];
+              for (const day of Object.keys(days)) {
+                days[day] = days[day]
+                  .map((item: ScheduleItem) => {
+                    if (item.libraryAnime.id !== updated.id) return item;
+                    return { ...item, libraryAnime: { ...item.libraryAnime, ...updated } };
+                  })
+                  .filter((item: ScheduleItem) => watchingStatuses.includes(item.libraryAnime.status));
+              }
+              return { ...prev, days };
+            });
+            closeMenu();
+          }}
           onRemove={(id) => {
             onRemove?.(id);
-            // Remove from local state immediately
             setScheduleData(prev => {
               if (!prev) return prev;
               const days = { ...prev.days };
@@ -251,7 +267,6 @@ export default function Schedule({ settings, onSearchRequest, onUpdate, onRemove
               }
               return { ...prev, days };
             });
-
           }}
           onSearchRequest={(q) => { onSearchRequest(q); closeMenu(); }}
           settings={settings}

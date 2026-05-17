@@ -50,6 +50,7 @@ const config = {
     shortcutName: "AniTrack",
     installerIcon: "icon.png",
     uninstallerIcon: "icon.png",
+    artifactName: "anitrack-Setup-${version}.${ext}",
   },
 
   mac: {
