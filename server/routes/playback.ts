@@ -119,11 +119,9 @@ function findPlayer(): {
     // via load-file command through the lua interface after connecting.
     const args = [
       "--extraintf=luaintf",
-      "--lua-intf=syncplay",
+      "--lua-intf=syncwatch",
       "--no-quiet",
       "--no-input-fast-seek",
-      "--play-and-pause",
-      "--start-time=0",
       "--no-one-instance",
       "--no-one-instance-when-started-from-file",
       `--lua-config=syncplay={modulepath=\"${vlcModulePath}\",port=\"${vlcPort}\"}`,

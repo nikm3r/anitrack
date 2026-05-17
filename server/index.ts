@@ -82,6 +82,9 @@ if (IS_PROD) {
   app.get("*", (_req, res) => res.sendFile(path.join(distPath, "index.html")));
 }
 
+// Initialize sync engine with socket.io instance
+import('./sync/syncEngine.js').then(({ getSyncEngine }) => getSyncEngine(io));
+
 io.on("connection", (socket) => {
   console.log("[socket] Client connected:", socket.id);
   socket.on("disconnect", () => console.log("[socket] Client disconnected:", socket.id));

@@ -41,6 +41,7 @@ function guessEpisode(filename: string, totalEpisodes?: number | null): number |
 
   const tryN = (n: number): number | null => {
     if (n <= 0) return null;
+    if (n >= 1900 && n <= 2100) return null;
     if (totalEpisodes && n > totalEpisodes) return null;
     return n;
   };

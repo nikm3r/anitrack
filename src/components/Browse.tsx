@@ -4,6 +4,7 @@ import { api } from "../api";
 import type { Anime, AnimeStatus, AppSettings } from "../types/anime";
 import SeriesCard from "./SeriesCard";
 import SeriesDetail from "./SeriesDetail";
+import ContextMenu from "./ContextMenu";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -32,6 +33,8 @@ interface Props {
   settings: AppSettings;
   onAnimeAdded: (anime: Anime) => void;
   onAnimeRemoved: (id: number) => void;
+  onSearchRequest?: (query: string) => void;
+  onUpdate?: (updated: Partial<Anime> & { id: number }) => void;
 }
 
 const SEASONS = ["WINTER", "SPRING", "SUMMER", "FALL"] as const;
@@ -342,7 +345,7 @@ function BrowseDetail({
 
 // ─── Main Browse Component ────────────────────────────────────────────────────
 
-export default function Browse({ animeList, settings, onAnimeAdded, onAnimeRemoved }: Props) {
+export default function Browse({ animeList, settings, onAnimeAdded, onAnimeRemoved, onSearchRequest, onUpdate }: Props) {
   const { season: initSeason, year: initYear } = getCurrentSeason();
   const [season, setSeason] = useState<Season>(initSeason);
   const [year, setYear] = useState(initYear);
@@ -428,11 +431,11 @@ export default function Browse({ animeList, settings, onAnimeAdded, onAnimeRemov
     if (!local) return;
     try {
       await api.patch(`/api/anime/${local.id}`, { status });
-      await api.patch(`/api/anime/${local.id}/progress`, { progress: local.progress, status });
+      onUpdate?.({ id: local.id, status });
     } catch (e) {
       console.error("Failed to update status:", e);
     }
-  }, [animeList]);
+  }, [animeList, onUpdate]);
 
   const handleAdd = useCallback(async (anime: BrowseAnime, status: AnimeStatus) => {
     if (libraryIds.has(anime.id)) {
@@ -507,9 +510,25 @@ export default function Browse({ animeList, settings, onAnimeAdded, onAnimeRemov
   const BrowseContextMenu = () => {
     if (!contextMenu.visible || !contextMenu.anime) return null;
     const a = contextMenu.anime;
-    const local = animeList.find(lib => lib.anilist_id === a.id);
     const inLib = libraryIds.has(a.id);
+    const local = animeList.find(lib => lib.anilist_id === a.id);
 
+    // If the anime is already in your library, display the full Context Menu.
+    if (inLib && local) {
+      return (
+        <ContextMenu
+          onSearchRequest={q => onSearchRequest?.(q)}
+          x={contextMenu.x} y={contextMenu.y}
+          anime={local}
+          onClose={() => setContextMenu(c => ({ ...c, visible: false }))}
+          onUpdate={(updated) => { onUpdate?.(updated); setContextMenu(c => ({ ...c, visible: false })); }}
+          onRemove={(id) => { onAnimeRemoved(id); setContextMenu(c => ({ ...c, visible: false })); }}
+          settings={settings}
+        />
+      );
+    }
+
+    // If it's NOT in the library, display a simplified menu to just add it.
     const STATUS_OPTIONS: { value: AnimeStatus; label: string }[] = [
       { value: "WATCHING",  label: "Watching" },
       { value: "COMPLETED", label: "Completed" },
@@ -523,7 +542,10 @@ export default function Browse({ animeList, settings, onAnimeAdded, onAnimeRemov
         <div className="fixed inset-0 z-[900]" onClick={() => setContextMenu(c => ({ ...c, visible: false }))} />
         <div
           className="fixed z-[901] w-52 bg-zinc-900 border border-white/10 rounded-xl shadow-2xl shadow-black/60 py-1.5"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
+          style={{
+            left: Math.min(contextMenu.x, typeof window !== "undefined" ? window.innerWidth - 220 : contextMenu.x),
+            top: Math.min(contextMenu.y, typeof window !== "undefined" ? window.innerHeight - 250 : contextMenu.y)
+          }}
           onClick={e => e.stopPropagation()}
         >
           <div className="px-4 py-2 mb-0.5">
@@ -535,29 +557,13 @@ export default function Browse({ animeList, settings, onAnimeAdded, onAnimeRemov
           {STATUS_OPTIONS.map(opt => (
             <button key={opt.value}
               onClick={() => {
-                if (inLib) handleStatusChange(a.id, opt.value);
-                else handleAdd(a, opt.value);
+                handleAdd(a, opt.value);
                 setContextMenu(c => ({ ...c, visible: false }));
               }}
-              className={`flex items-center justify-between w-full px-4 py-2 text-xs text-left transition-colors ${
-                inLib && local?.status === opt.value
-                  ? "text-emerald-400 bg-emerald-500/10"
-                  : "text-zinc-300 hover:bg-white/8"
-              }`}>
+              className="flex items-center justify-between w-full px-4 py-2 text-xs text-left transition-colors text-zinc-300 hover:bg-white/8">
               {opt.label}
-              {inLib && local?.status === opt.value && <span className="text-emerald-500">✓</span>}
             </button>
           ))}
-          {inLib && (
-            <>
-              <div className="h-px bg-white/5 my-1" />
-              <button
-                onClick={() => { handleRemove(a.id); setContextMenu(c => ({ ...c, visible: false })); }}
-                className="flex items-center gap-2 w-full px-4 py-2 text-xs text-red-400 hover:bg-red-500/10 transition-colors">
-                <Trash2 className="w-3.5 h-3.5" /> Remove from Library
-              </button>
-            </>
-          )}
         </div>
       </>
     );

@@ -188,10 +188,12 @@ router.patch("/:id", (req: Request, res: Response) => {
 router.delete("/:id", async (req: Request, res: Response) => {
   const db = getDb();
   const id = parseInt(req.params.id, 10);
+  
+  // 1. Fetch the exact entry tracking snapshot before firing network tasks
   const anime = db.prepare("SELECT * FROM anime WHERE id = ?").get(id) as any;
   if (!anime) { res.status(404).json({ error: "Not found" }); return; }
 
-  // Remove from tracker first
+  // 2. Resolve external tracker removal asynchronously
   try {
     const settings = Object.fromEntries(
       (db.prepare("SELECT key, value FROM settings").all() as any[]).map((r: any) => [r.key, r.value])
@@ -208,7 +210,15 @@ router.delete("/:id", async (req: Request, res: Response) => {
     // Continue with local delete even if tracker fails
   }
 
-  db.prepare("DELETE FROM anime WHERE id = ?").run(id);
+  // 3. FIX: Validate the targeted record STILL exists and hasn't been overwritten by an atomic sync mutation block
+  const baselineCheck = db.prepare("SELECT id FROM anime WHERE id = ?").get(id);
+  if (baselineCheck) {
+    db.prepare("DELETE FROM anime WHERE id = ?").run(id);
+    console.log(`[anime] Safely pruned library entry ID: ${id}`);
+  } else {
+    console.warn(`[anime] Skip deletion: Entry ID ${id} was already reorganized by a concurrent sync loop.`);
+  }
+
   // Clear schedule cache so next fetch doesn't return stale data
   
   res.status(204).send();

@@ -60,7 +60,7 @@ router.get("/", async (req: Request, res: Response) => {
 
   const db = getDb();
   const animeRows = db.prepare(
-    "SELECT id, anilist_id, mal_id, title_romaji, title_english, cover_image, progress, total_episodes, status FROM anime"
+    "SELECT id, anilist_id, mal_id, title_romaji, title_english, cover_image, progress, total_episodes, status FROM anime WHERE status = 'WATCHING'"
   ).all() as {
     id: number; anilist_id: number | null; mal_id: number | null;
     title_romaji: string; title_english: string | null; cover_image: string | null;

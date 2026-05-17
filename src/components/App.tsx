@@ -130,6 +130,8 @@ export default function App() {
                 settings={settings}
                 onAnimeAdded={(anime) => animeList.addAnime(anime)}
                 onAnimeRemoved={(id) => animeList.removeAnime(id)}
+                onSearchRequest={handleSearchRequest}
+                onUpdate={(updated) => { const { id, ...rest } = updated; animeList.updateAnime(id, rest); }}
               />
             </div>
 

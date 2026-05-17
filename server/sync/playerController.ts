@@ -20,8 +20,6 @@ export interface IPlayerController {
 }
 
 // ─── MPV Controller ───────────────────────────────────────────────────────────
-// Uses MPV's JSON IPC. observe_property gives us push events on every change
-// so we never need to poll — exactly how syncplay's mpv.py works via python-mpv-jsonipc.
 
 export class MpvController implements IPlayerController {
   private socket: net.Socket | null = null;
@@ -31,9 +29,6 @@ export class MpvController implements IPlayerController {
   private buffer = "";
   private observers = new Map<string, (val: any) => void>();
 
-  // Syncplay pattern: store raw values + timestamp separately.
-  // getStatus() extrapolates position forward when playing,
-  // mirroring syncplay's getPlayerPosition(): position += (now - lastUpdate).
   private _position = 0;
   private _paused = true;
   private _filename: string | null = null;
@@ -50,7 +45,11 @@ export class MpvController implements IPlayerController {
   async connect(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.socket = net.createConnection(this.socketPath);
-      this.socket.on("connect", () => { this.connected = true; this._observeProperties(); resolve(); });
+      this.socket.on("connect", () => {
+        this.connected = true;
+        this._observeProperties();
+        resolve();
+      });
       this.socket.on("data", (data) => {
         this.buffer += data.toString();
         const lines = this.buffer.split("\n");
@@ -59,7 +58,8 @@ export class MpvController implements IPlayerController {
       });
       this.socket.on("error", (err) => { this.connected = false; reject(err); });
       this.socket.on("close", () => {
-        this.connected = false; this.socket = null;
+        this.connected = false;
+        this.socket = null;
         for (const { reject } of this.pending.values()) reject(new Error("MPV socket closed"));
         this.pending.clear();
       });
@@ -96,10 +96,10 @@ export class MpvController implements IPlayerController {
     });
     this.observers.set("pause", (val) => {
       if (val !== null && val !== undefined) {
+        const prev = this._paused;
         this._paused = val;
         this._lastPauseUpdate = Date.now();
-        // Reset position timestamp on unpause so extrapolation starts from now
-        if (!val) this._lastPositionUpdate = Date.now();
+        if (prev !== val && !val) this._lastPositionUpdate = Date.now();
       }
     });
     this.observers.set("filename", (val) => { this._filename = val ?? null; });
@@ -125,13 +125,9 @@ export class MpvController implements IPlayerController {
 
   async getStatus(): Promise<PlayerStatus | null> {
     if (!this.connected || this._lastPositionUpdate === 0) return null;
-    const extrapolated = this._paused
-      ? this._position
-      : this._position + (Date.now() - this._lastPositionUpdate) / 1000;
-    return { position: extrapolated, paused: this._paused, filename: this._filename };
+    return { position: this._position, paused: this._paused, filename: this._filename };
   }
 
-  // Exposed for syncEngine's double-condition check (syncplay pattern)
   getStoredPosition(): number { return this._position; }
   getStoredPaused(): boolean { return this._paused; }
   getLastPositionUpdate(): number { return this._lastPositionUpdate; }
@@ -139,17 +135,10 @@ export class MpvController implements IPlayerController {
 
   async seek(seconds: number): Promise<void> {
     await this._command(["set_property", "time-pos", seconds]);
-    // Syncplay pattern: update stored state immediately after commanding so
-    // the next poll's double-condition check won't re-broadcast it as user action
-    this._position = seconds;
-    this._lastPositionUpdate = Date.now();
   }
 
   async setPaused(paused: boolean): Promise<void> {
     await this._command(["set_property", "pause", paused]);
-    this._paused = paused;
-    this._lastPauseUpdate = Date.now();
-    if (!paused) this._lastPositionUpdate = Date.now();
   }
 
   async setRate(rate: number): Promise<void> {
@@ -164,8 +153,8 @@ export class MpvController implements IPlayerController {
 }
 
 // ─── VLC Controller ───────────────────────────────────────────────────────────
-// Talks to the syncplay.lua TCP interface. Sends "." every 200ms to poll
-// state — same as syncplay's askForStatus() pattern.
+// Talks to syncwatch.lua TCP interface via the same protocol as syncplay.lua.
+// Sends "." polls every 500ms to get state updates.
 
 export class VlcController implements IPlayerController {
   private socket: net.Socket | null = null;
@@ -178,43 +167,62 @@ export class VlcController implements IPlayerController {
   private _lastPauseUpdate = 0;
   private _pollTimer: ReturnType<typeof setInterval> | null = null;
 
+  // Debounce: ignore position updates that are too small (noise)
+  private readonly POSITION_MIN_CHANGE = 0.05; // seconds
+
   constructor(private port: number) {}
 
   async connect(): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.socket = net.createConnection(this.port, "127.0.0.1");
-      this.socket.on("connect", () => { this.connected = true; this._startPolling(); resolve(); });
-      this.socket.on("data", (data) => {
+      const sock = net.createConnection(this.port, "127.0.0.1");
+      sock.on("connect", () => {
+        this.socket = sock;
+        this.connected = true;
+        this._startPolling();
+        resolve();
+      });
+      sock.on("data", (data) => {
         this.buffer += data.toString();
         const lines = this.buffer.split("\n");
         this.buffer = lines.pop() || "";
-        for (const line of lines) { const t = line.trim(); if (t) this._handleLine(t); }
+        for (const line of lines) {
+          const t = line.trim();
+          if (t) this._handleLine(t);
+        }
       });
-      this.socket.on("error", (err) => { this.connected = false; reject(err); });
-      this.socket.on("close", () => { this.connected = false; this.socket = null; this._stopPolling(); });
-      setTimeout(() => { if (!this.connected) reject(new Error("VLC connection timeout")); }, 3000);
+      sock.on("error", (err) => { this.connected = false; reject(err); });
+      sock.on("close", () => {
+        this.connected = false;
+        this.socket = null;
+        this._stopPolling();
+      });
+      setTimeout(() => { if (!this.connected) { sock.destroy(); reject(new Error("VLC connection timeout")); } }, 3000);
     });
   }
 
   private _handleLine(line: string) {
     if (line.startsWith("playstate: ")) {
       const state = line.slice("playstate: ".length).trim();
-      if (state !== "no-input") {
-        const nowPaused = state !== "playing";
-        if (nowPaused !== this._paused) this._lastPauseUpdate = Date.now();
+      if (state === "no-input") return;
+      const nowPaused = state !== "playing";
+      if (nowPaused !== this._paused) {
         this._paused = nowPaused;
-        if (!this._paused) this._lastPositionUpdate = Date.now();
+        this._lastPauseUpdate = Date.now();
+        if (!nowPaused) this._lastPositionUpdate = Date.now();
       }
     } else if (line.startsWith("position: ")) {
       const raw = line.slice("position: ".length).trim().replace(",", ".");
+      if (raw === "no-input") return;
       const val = parseFloat(raw);
-      if (!isNaN(val) && raw !== "no-input") {
-        this._position = val % 604800; // strip titlemultiplier
-        this._lastPositionUpdate = Date.now();
-      }
+      if (isNaN(val)) return;
+      // Wrap-around from title multiplier (604800 = 1 week in seconds)
+      const cleaned = val % 604800;
+      if (Math.abs(cleaned - this._position) < this.POSITION_MIN_CHANGE) return;
+      this._position = cleaned;
+      this._lastPositionUpdate = Date.now();
     } else if (line.startsWith("filepath: ") || line.startsWith("filename: ")) {
       const val = line.split(": ").slice(1).join(": ").trim();
-      this._filename = val && val !== "no-input" ? val : null;
+      this._filename = (val && val !== "no-input") ? val : null;
     }
   }
 
@@ -224,7 +232,10 @@ export class VlcController implements IPlayerController {
   }
 
   private _startPolling() {
-    this._pollTimer = setInterval(() => { if (this.connected) this._send("."); }, 200);
+    this._stopPolling();
+    this._pollTimer = setInterval(() => {
+      if (this.connected) this._send(".");
+    }, 500);
   }
 
   private _stopPolling() {
@@ -235,10 +246,7 @@ export class VlcController implements IPlayerController {
 
   async getStatus(): Promise<PlayerStatus | null> {
     if (!this.connected || this._lastPositionUpdate === 0) return null;
-    const extrapolated = this._paused
-      ? this._position
-      : this._position + (Date.now() - this._lastPositionUpdate) / 1000;
-    return { position: extrapolated, paused: this._paused, filename: this._filename };
+    return { position: this._position, paused: this._paused, filename: this._filename };
   }
 
   getStoredPosition(): number { return this._position; }
@@ -248,6 +256,7 @@ export class VlcController implements IPlayerController {
 
   async seek(seconds: number): Promise<void> {
     this._send(`set-position: ${seconds}`);
+    // Optimistically update local position to reduce bounce
     this._position = seconds;
     this._lastPositionUpdate = Date.now();
   }
@@ -256,7 +265,6 @@ export class VlcController implements IPlayerController {
     this._send(`set-playstate: ${paused ? "paused" : "playing"}`);
     this._paused = paused;
     this._lastPauseUpdate = Date.now();
-    if (!paused) this._lastPositionUpdate = Date.now();
   }
 
   async setRate(rate: number): Promise<void> {
@@ -280,10 +288,11 @@ export class VlcController implements IPlayerController {
 let activeController: IPlayerController | null = null;
 let activePlayerType: "mpv" | "vlc" | null = null;
 let vlcPort: number | null = null;
+let vlcFilePath: string | null = null;
 let _vlcReadyResolve: (() => void) | null = null;
 let _vlcReadyPromise: Promise<void> | null = null;
-
-let vlcFilePath: string | null = null;
+let _connectingPromise: Promise<IPlayerController | null> | null = null;
+let _gaveUp = false;
 
 export function setActivePlayer(type: "mpv" | "vlc", port?: number, filePath?: string) {
   activePlayerType = type;
@@ -291,8 +300,7 @@ export function setActivePlayer(type: "mpv" | "vlc", port?: number, filePath?: s
   if (type === "vlc" && filePath) vlcFilePath = filePath;
   activeController = null;
   _connectingPromise = null;
-  // For VLC, block getController() until signalVlcReady() fires.
-  // This prevents the retry loop from exhausting itself before VLC is ready.
+  // Block connections until lua signals ready
   _gaveUp = type === "vlc";
   console.log(`[vlc] setActivePlayer: type=${type}, port=${port}, waiting for lua ready signal`);
 }
@@ -302,17 +310,17 @@ export function clearActivePlayer() {
   activeController = null;
   activePlayerType = null;
   vlcPort = null;
+  vlcFilePath = null;
   _vlcReadyResolve = null;
   _vlcReadyPromise = null;
   _connectingPromise = null;
+  _gaveUp = false;
 }
 
-// Called by playback.ts when VLC's stderr emits the "Hosting Syncplay" line.
-// Syncplay pattern: don't attempt TCP connect until the lua interface says it's listening.
 export function signalVlcReady() {
   console.log("[vlc] lua interface ready — attempting connection");
   _connectingPromise = null;
-  _gaveUp = false; // now allow getController() to connect
+  _gaveUp = false;
   _vlcReadyResolve?.();
 }
 
@@ -321,17 +329,10 @@ export function initVlcReadyPromise(): Promise<void> {
   return _vlcReadyPromise;
 }
 
-// Singleton connection promise — prevents parallel retry loops when poll fires every 100ms
-let _connectingPromise: Promise<IPlayerController | null> | null = null;
-let _gaveUp = false;
-
 export async function getController(): Promise<IPlayerController | null> {
   if (activeController?.isConnected()) return activeController;
   if (!activePlayerType) return null;
-  if (_gaveUp) {
-    // Only log once
-    return null;
-  }
+  if (_gaveUp) return null;
   if (_connectingPromise) return _connectingPromise;
   _connectingPromise = _doConnect().finally(() => { _connectingPromise = null; });
   return _connectingPromise;
@@ -343,24 +344,21 @@ async function _doConnect(): Promise<IPlayerController | null> {
       const ctrl = new MpvController(MpvController.getSocketPath());
       await ctrl.connect();
       activeController = ctrl;
+      console.log("[mpv] Connected via JSON IPC");
       return ctrl;
     }
 
     if (activePlayerType === "vlc" && vlcPort) {
-      // Syncplay VLCClientFactory: initialDelay=0.3s, maxDelay=0.45s, maxRetries=50
-      // We do NOT wait for the ready promise here — signalVlcReady() resets
-      // _connectingPromise so a fresh _doConnect starts after the signal fires.
-      // This avoids the race where _doConnect is suspended inside _connectingPromise
-      // and can't be restarted when the signal arrives.
-      console.log(`[vlc] Attempting to connect on port ${vlcPort}...`);
       const MAX_RETRIES = 50;
+      const RETRY_DELAY = 400;
+      console.log(`[vlc] Attempting to connect on port ${vlcPort}...`);
+
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         try {
           const ctrl = new VlcController(vlcPort);
           await ctrl.connect();
           activeController = ctrl;
           console.log(`[vlc] Connected on port ${vlcPort} (attempt ${attempt})`);
-          // Send the file via load-file command, exactly as syncplay does
           if (vlcFilePath) {
             console.log(`[vlc] Sending load-file: ${vlcFilePath}`);
             await ctrl.loadFile(vlcFilePath);
@@ -368,17 +366,14 @@ async function _doConnect(): Promise<IPlayerController | null> {
           return ctrl;
         } catch (e) {
           if (attempt === 1 || attempt % 10 === 0) {
-            console.log(`[vlc] Connect attempt ${attempt}/${MAX_RETRIES} on port ${vlcPort} failed: ${e instanceof Error ? e.message : String(e)}`);
+            console.log(`[vlc] Connect attempt ${attempt}/${MAX_RETRIES} failed: ${e instanceof Error ? e.message : String(e)}`);
           }
-          if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, 400));
+          if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, RETRY_DELAY));
         }
       }
-      console.error(`[vlc] Failed to connect after ${MAX_RETRIES} attempts on port ${vlcPort} — giving up until next launch`);
+
+      console.error(`[vlc] Failed to connect after ${MAX_RETRIES} attempts — giving up`);
       _gaveUp = true;
-      // Emit an event so playback.ts can relaunch with file as direct arg
-      if (vlcFilePath) {
-        console.warn(`[vlc] lua interface failed — file was not loaded. User should close and reopen.`);
-      }
     }
   } catch {
     activeController = null;
@@ -386,24 +381,38 @@ async function _doConnect(): Promise<IPlayerController | null> {
   return null;
 }
 
-// ─── VLC lua intf setup ───────────────────────────────────────────────────────
+// ─── VLC lua intf install ─────────────────────────────────────────────────────
 
-export function getVlcIntfPaths(): { intfPath: string; userPath: string } | null {
+export function getVlcIntfPaths(): { userPath: string } | null {
   const home = os.homedir();
   const plat = process.platform;
-  if (plat === "linux") return { intfPath: "/usr/lib/vlc/lua/intf/", userPath: path.join(home, ".local/share/vlc/lua/intf/") };
-  if (plat === "darwin") return { intfPath: "/Applications/VLC.app/Contents/MacOS/share/lua/intf/", userPath: path.join(home, "Library/Application Support/org.videolan.vlc/lua/intf/") };
-  if (plat === "win32") return { intfPath: "", userPath: path.join(process.env.APPDATA || home, "VLC", "lua", "intf") };
+  if (plat === "linux")  return { userPath: path.join(home, ".local/share/vlc/lua/intf/") };
+  if (plat === "darwin") return { userPath: path.join(home, "Library/Application Support/org.videolan.vlc/lua/intf/") };
+  if (plat === "win32")  return { userPath: path.join(process.env.APPDATA || home, "VLC", "lua", "intf") };
   return null;
 }
 
 export function installVlcLua(resourcesPath: string, vlcExePath?: string): boolean {
-  const src = path.join(resourcesPath, "syncplay.lua");
-  if (!fs.existsSync(src)) { console.error(`[vlc] syncplay.lua not found at: ${src}`); return false; }
+  // Prefer syncwatch.lua (our custom interface), fall back to syncplay.lua
+  let src = path.join(resourcesPath, "syncwatch.lua");
+  let destName = "syncwatch.lua";
+  if (!fs.existsSync(src)) {
+    src = path.join(resourcesPath, "syncplay.lua");
+    destName = "syncplay.lua";
+  }
+  if (!fs.existsSync(src)) {
+    console.error(`[vlc] No lua interface file found in: ${resourcesPath}`);
+    return false;
+  }
 
+  // Portable VLC
   if (vlcExePath?.toLowerCase().includes("portable")) {
     const portableIntf = path.join(path.dirname(vlcExePath), "App", "vlc", "lua", "intf");
-    try { fs.mkdirSync(portableIntf, { recursive: true }); fs.copyFileSync(src, path.join(portableIntf, "syncplay.lua")); return true; } catch {}
+    try {
+      fs.mkdirSync(portableIntf, { recursive: true });
+      fs.copyFileSync(src, path.join(portableIntf, destName));
+      return true;
+    } catch {}
   }
 
   const paths = getVlcIntfPaths();
@@ -411,24 +420,27 @@ export function installVlcLua(resourcesPath: string, vlcExePath?: string): boole
 
   let installed = false;
 
-  // Install to user path
+  // User path
   try {
     fs.mkdirSync(paths.userPath, { recursive: true });
-    fs.copyFileSync(src, path.join(paths.userPath, "syncplay.lua"));
-    console.log(`[vlc] Installed syncplay.lua to user path: ${paths.userPath}`);
+    fs.copyFileSync(src, path.join(paths.userPath, destName));
+    console.log(`[vlc] Installed ${destName} to user path: ${paths.userPath}`);
     installed = true;
-  } catch (e) { console.error(`[vlc] Failed to install to user path: ${e}`); }
+  } catch (e) {
+    console.error(`[vlc] Failed to install to user path: ${e}`);
+  }
 
-  // On Windows also install to VLC system lua/intf dir alongside the exe
-  // VLC 3.x checks this location first
+  // Windows system path (VLC exe dir)
   if (process.platform === "win32" && vlcExePath) {
     const sysIntf = path.join(path.dirname(vlcExePath), "lua", "intf");
     try {
       fs.mkdirSync(sysIntf, { recursive: true });
-      fs.copyFileSync(src, path.join(sysIntf, "syncplay.lua"));
-      console.log(`[vlc] Installed syncplay.lua to system path: ${sysIntf}`);
+      fs.copyFileSync(src, path.join(sysIntf, destName));
+      console.log(`[vlc] Installed ${destName} to system path: ${sysIntf}`);
       installed = true;
-    } catch (e) { console.error(`[vlc] Failed to install to system path: ${e}`); }
+    } catch (e) {
+      console.error(`[vlc] Failed to install to system path: ${e}`);
+    }
   }
 
   return installed;
