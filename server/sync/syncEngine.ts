@@ -88,7 +88,7 @@ export class SyncEngine {
 
     this.socket.on("connect", () => {
       console.log(`[sync] Hub connected, joined room "${room}"`);
-      this.socket!.emit("join", { room, username });
+      this.socket!.emit("join-room", room, username);
     });
 
     this.socket.on("disconnect", () => {
@@ -257,7 +257,7 @@ export class SyncEngine {
       if (status) { position = status.position; paused = status.paused; }
     }
 
-    this.socket.emit("state", { position, paused, setBy: this.username, ts: Date.now() });
+    this.socket.emit("state", { roomId: this.room, position, paused, setBy: this.username, ts: Date.now() });
   }
 
   // ─── Polling ──────────────────────────────────────────────────────────────
@@ -284,7 +284,7 @@ export class SyncEngine {
       this.lastBroadcastAt = now;
       this.lastLocalPosition = status.position;
       this.lastLocalPauseState = status.paused;
-      this.socket?.emit("state", { position: status.position, paused: status.paused, setBy: this.username, ts: now });
+      this.socket?.emit("state", { roomId: this.room, position: status.position, paused: status.paused, setBy: this.username, ts: now });
     }, POSITION_BROADCAST_INTERVAL);
   }
 

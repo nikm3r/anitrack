@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { getSyncEngine } from "../sync/syncEngine.js";
 import { getDb } from "../db.js";
+import { getController } from "../sync/playerController.js";
 
 const router = Router();
 
@@ -30,12 +31,19 @@ router.post("/leave", async (_req: Request, res: Response) => {
 });
 
 // GET /api/sync/status
-router.get("/status", (_req: Request, res: Response) => {
+router.get("/status", async (_req: Request, res: Response) => {
   const engine = getSyncEngine();
+  const ctrl = await getController();
+  const status = ctrl ? await ctrl.getStatus() : null;
   res.json({
     active: engine.isActive(),
+    hubConnected: engine.isActive(),
     room: engine.getRoom(),
     peers: engine.getPeers(),
+    playerConnected: !!ctrl?.isConnected(),
+    playerPosition: status?.position ?? 0,
+    playerPaused: status?.paused ?? true,
+    drift: 0,
   });
 });
 
