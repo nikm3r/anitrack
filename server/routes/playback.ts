@@ -103,7 +103,7 @@ function findPlayer(): {
   // FIX: Generate VLC port once here and capture it in the closure.
   //      Previously the port was embedded in the args string and then
   //      re-parsed via regex (error-prone if path/title contained port="NNNN").
-  const vlcPort = 10000 + Math.floor(Math.random() * 45000);
+  const vlcPort = 4123; // Fixed port matching syncwatch.lua default
   // Build the lua-config exactly as syncplay does on Windows:
   // modulepath with escaped quotes, port with escaped quotes, lua-config last.
   const vlcExeDir = (() => {
@@ -122,9 +122,6 @@ function findPlayer(): {
       "--lua-intf=syncwatch",
       "--no-quiet",
       "--no-input-fast-seek",
-      "--no-one-instance",
-      "--no-one-instance-when-started-from-file",
-      `--lua-config=syncplay={modulepath=\"${vlcModulePath}\",port=\"${vlcPort}\"}`,
     ];
     // Always pass the file as an arg so it opens immediately.
     // The lua interface will also send load-file after connecting, which is harmless.
@@ -234,14 +231,26 @@ router.post("/launch", async (req: Request, res: Response) => {
       // Syncplay pattern: spawn with stderr piped so we can read it.
       // We wait for "Hosting Syncplay interface on port" before connecting.
       // On Windows syncplay uses stdio:pipe too; on others it reads stderr.
-      proc = spawn(player.exe, player.args(filePath, forSync), {
+      const vlcArgsList = player.args(filePath, forSync);
+      console.log(`[vlc] Spawning: ${player.exe} ${vlcArgsList.join(" ")}`);
+      proc = spawn(player.exe, vlcArgsList, {
         detached: true,
-        stdio: "ignore",
+        stdio: ["ignore", "ignore", "pipe"],
       });
+
+      // Log stderr to catch VLC errors
+      (proc as any).stderr?.on("data", (d: Buffer) => {
+        const line = d.toString().trim();
+        if (line) console.log(`[vlc stderr] ${line}`);
+        if (line.includes("Hosting SyncWatch") || line.includes("Hosting Syncplay") || line.includes("port")) {
+          signalVlcReady();
+        }
+      });
+      (proc as any).stderr?.on("close", () => signalVlcReady());
       proc.unref();
 
-      // Signal VLC ready after a delay to allow lua interface to start
-      setTimeout(() => signalVlcReady(), 1500);
+      // Fallback: signal ready after 3s
+      setTimeout(() => signalVlcReady(), 3000);
     } else {
       proc = spawn(player.exe, player.args(filePath, forSync), { detached: true, stdio: "ignore" });
       proc.unref();
