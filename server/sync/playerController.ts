@@ -579,6 +579,10 @@ async function _doConnect(): Promise<IPlayerController | null> {
           if (vlcFilePath) {
             console.log(`[vlc] Sending load-file: ${vlcFilePath}`);
             await ctrl.loadFile(vlcFilePath);
+            // Give VLC a moment to load, then pause
+            // (VLC auto-plays when file is added to playlist)
+            await new Promise(r => setTimeout(r, 1500));
+            await ctrl.setPaused(true);
           }
           return ctrl;
         } catch (e) {
