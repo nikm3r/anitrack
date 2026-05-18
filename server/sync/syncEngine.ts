@@ -1,24 +1,53 @@
+/**
+ * syncEngine.ts — AniTrack SyncWatch sync engine
+ * 
+ * Faithfully based on Syncplay 1.7.5 client.py sync algorithm:
+ * 
+ * _determinePlayerStateChange:
+ *   pauseChange = playerPaused != paused AND globalPaused != paused
+ *   seeked = abs(playerPos - pos) > SEEK_THRESHOLD AND abs(globalPos - pos) > SEEK_THRESHOLD
+ *
+ * _changePlayerStateAccordingToGlobalState (in order):
+ *   1. doSeek flag → hard seek
+ *   2. diff > rewindThreshold (4s, we are ahead) → rewind
+ *   3. diff < -fastforwardBehindThreshold (-1.75s) for > threshold time → fastforward
+ *   4. slowOnDesync → rate 0.95x when diff > 1.5s, reset when diff < 0.1s
+ *   5. pauseChanged → apply pause/unpause
+ *
+ * SYNC_ON_PAUSE = true → seek to global position when applying remote pause
+ *
+ * Position extrapolation:
+ *   getPlayerPosition() = storedPos + (now - lastUpdate) if playing
+ *   getGlobalPosition() = storedPos + (now - lastUpdate) if playing
+ */
+
 import { Server as SocketIOServer } from "socket.io";
 import { getController } from "./playerController.js";
 
-// ─── Constants (based on Syncplay's constants.py) ────────────────────────────
+// ─── Constants (from Syncplay constants.py) ───────────────────────────────────
 
-const PLAYER_POLL_INTERVAL     = 500;   // ms — same as Syncplay
-const REWIND_THRESHOLD         = 4.0;   // seconds — hard seek back (Syncplay default: 4)
-const FASTFORWARD_THRESHOLD    = 5.0;   // seconds — hard seek forward (Syncplay default: 5)
-const SLOWDOWN_THRESHOLD       = 0.4;   // seconds — slow down playback rate
-const SLOWDOWN_RATE            = 0.8;   // playback rate when slowing down
-const SEEK_COOLDOWN            = 2000;  // ms — ignore drift after a seek
-const PAUSE_DEBOUNCE           = 500;   // ms — ignore duplicate pause events
-const POSITION_BROADCAST_INTERVAL = 500; // ms
+const PLAYER_ASK_DELAY          = 0.1;    // 100ms — local poll interval
+const SEEK_THRESHOLD            = 1.0;    // seconds — detect as seek vs drift
+const REWIND_THRESHOLD          = 4.0;    // seconds ahead → hard rewind
+const FASTFORWARD_BEHIND_THRESHOLD = 1.75; // seconds behind before FF starts
+const FASTFORWARD_THRESHOLD     = 5.0;    // seconds behind → trigger fastforward
+const FASTFORWARD_EXTRA_TIME    = 0.25;   // extra seconds added when fast-forwarding
+const FASTFORWARD_RESET_THRESHOLD = 3.0;  // seconds to wait before re-checking FF
+const SLOWDOWN_RATE             = 0.95;   // playback rate for soft correction
+const SLOWDOWN_KICKIN_THRESHOLD = 1.5;    // seconds → start slowing down
+const SLOWDOWN_RESET_THRESHOLD  = 0.1;    // seconds → restore normal rate
+const PAUSE_DEBOUNCE            = 500;    // ms — ignore duplicate pause events
+const BROADCAST_INTERVAL        = 500;    // ms — periodic state broadcast to hub
+const SYNC_ON_PAUSE             = true;   // seek to global pos when applying remote pause
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface HubState {
-  position: number;
+interface GlobalState {
+  position: number;     // raw position from hub (before extrapolation)
   paused: boolean;
   setBy: string;
-  ts: number;
+  ts: number;           // local time when we received this
+  doSeek?: boolean;
 }
 
 interface PeerState {
@@ -32,7 +61,6 @@ interface PeerState {
 
 export class SyncEngine {
   private active = false;
-  private isHost = false;
   private room = "";
   username = "";
 
@@ -40,29 +68,29 @@ export class SyncEngine {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private broadcastTimer: ReturnType<typeof setInterval> | null = null;
 
-  // Authoritative state from hub (after latency compensation)
-  private hubState: HubState | null = null;
+  // ── Local player state (raw, not extrapolated) ────────────────────────────
+  private _playerPosition = 0.0;
+  private _playerPaused = true;
+  private _lastPlayerUpdate: number | null = null;
 
-  // Last known local player state
-  private lastLocalPosition = 0;
-  private lastLocalPaused: boolean | null = null;
-  private lastLocalTs = 0;
+  // ── Global state from hub (raw, not extrapolated) ─────────────────────────
+  private _globalPosition = 0.0;
+  private _globalPaused = true;
+  private _lastGlobalUpdate: number | null = null;
 
-  // Cooldown/debounce timestamps
-  private lastSeekAt = 0;
-  private lastPauseCommandAt = 0;
-  private lastBroadcastAt = 0;
+  // ── Rate correction tracking ───────────────────────────────────────────────
+  private _speedChanged = false;
 
-  // Latency tracking (NTP-style)
-  private latency = 0;
-  private isSlowedDown = false;
+  // ── Fastforward tracking ───────────────────────────────────────────────────
+  private _behindFirstDetected: number | null = null;
 
-  // Peers
+  // ── Debounce / cooldowns ───────────────────────────────────────────────────
+  private _lastPauseCommandAt = 0;
+  private _lastBroadcastAt = 0;
+  private _lastSeekAt = 0;
+
+  // ── Peers ─────────────────────────────────────────────────────────────────
   private peers = new Map<string, PeerState>();
-
-  // Callbacks
-  private onPeersChange?: (peers: PeerState[]) => void;
-  private onHubEvent?: (event: string, data: any) => void;
 
   constructor(private io: SocketIOServer) {}
 
@@ -72,19 +100,49 @@ export class SyncEngine {
   getRoom(): string { return this.room; }
   getPeers(): PeerState[] { return [...this.peers.values()]; }
 
+  // Extrapolated player position (Syncplay's getPlayerPosition())
+  getPlayerPosition(): number {
+    if (!this._lastPlayerUpdate) {
+      return this._lastGlobalUpdate ? this.getGlobalPosition() : 0.0;
+    }
+    let pos = this._playerPosition;
+    if (!this._playerPaused) {
+      pos += (Date.now() - this._lastPlayerUpdate) / 1000;
+    }
+    return pos;
+  }
+
+  getPlayerPaused(): boolean {
+    if (!this._lastPlayerUpdate) {
+      return this._lastGlobalUpdate ? this.getGlobalPaused() : true;
+    }
+    return this._playerPaused;
+  }
+
+  // Extrapolated global position (Syncplay's getGlobalPosition())
+  getGlobalPosition(): number {
+    if (!this._lastGlobalUpdate) return 0.0;
+    let pos = this._globalPosition;
+    if (!this._globalPaused) {
+      pos += (Date.now() - this._lastGlobalUpdate) / 1000;
+    }
+    return pos;
+  }
+
+  getGlobalPaused(): boolean {
+    if (!this._lastGlobalUpdate) return true;
+    return this._globalPaused;
+  }
+
   async join(
     hubUrl: string,
     room: string,
     username: string,
-    onPeersChange?: (peers: PeerState[]) => void,
-    onHubEvent?: (event: string, data: any) => void
   ) {
     if (this.active) await this.leave();
 
     this.room = room;
     this.username = username;
-    this.onPeersChange = onPeersChange;
-    this.onHubEvent = onHubEvent;
 
     console.log(`[sync] Joining room "${room}" as "${username}"`);
 
@@ -96,36 +154,33 @@ export class SyncEngine {
       this.socket.emit("join-room", room, username);
     });
 
-    this.socket.on("disconnect", () => console.log("[sync] Hub disconnected"));
+    this.socket.on("disconnect", () => {
+      console.log("[sync] Hub disconnected");
+    });
 
+    // Receive global state from other clients
     this.socket.on("state", (data: any) => this._onHubState(data));
 
+    // Room membership updates
     this.socket.on("playlist-updated", (data: any) => {
-      // Extract peers from readyUsers
-      if (data?.readyUsers) {
-        const now = Date.now();
-        for (const [user] of Object.entries(data.readyUsers)) {
-          if (user !== this.username && !this.peers.has(user)) {
-            this.peers.set(user, { username: user, position: 0, paused: true, updatedAt: now });
-          }
+      if (!data?.readyUsers) return;
+      const now = Date.now();
+      // Add new peers
+      for (const user of Object.keys(data.readyUsers)) {
+        if (user !== this.username && !this.peers.has(user)) {
+          this.peers.set(user, { username: user, position: 0, paused: true, updatedAt: now });
         }
-        // Remove peers no longer in room
-        for (const [user] of this.peers) {
-          if (!(user in data.readyUsers)) this.peers.delete(user);
-        }
-        this._notifyPeers();
       }
-      if (data?.host) {
-        this.isHost = data.host === this.username;
-        console.log(`[sync] Host is now: ${data.host} (me: ${this.isHost})`);
-        this.io.emit("sync-host-changed", { host: data.host, isMe: this.isHost });
+      // Remove departed peers
+      for (const user of [...this.peers.keys()]) {
+        if (!(user in data.readyUsers)) this.peers.delete(user);
       }
+      this._notifyPeers();
     });
 
     this.socket.on("host-changed", (data: any) => {
-      this.isHost = data.host === this.username;
-      console.log(`[sync] Host is now: ${data.host} (me: ${this.isHost})`);
-      this.io.emit("sync-host-changed", { host: data.host, isMe: this.isHost });
+      console.log(`[sync] Host is now: ${data.host}`);
+      this.io.emit("sync-host-changed", { host: data.host });
     });
 
     this.active = true;
@@ -141,105 +196,204 @@ export class SyncEngine {
     this.socket?.disconnect();
     this.socket = null;
     this.room = "";
-    this.hubState = null;
     this.peers.clear();
-    this.lastSeekAt = 0;
-    this.lastPauseCommandAt = 0;
-    this.lastBroadcastAt = 0;
-    this.lastLocalPaused = null;
-    this.isSlowedDown = false;
-    // Reset playback rate if slowed down
-    const ctrl = await getController();
-    if (ctrl && this.isSlowedDown) {
-      try { (ctrl as any).setRate?.(1.0); } catch {}
+
+    // Reset sync state
+    this._lastGlobalUpdate = null;
+    this._lastPlayerUpdate = null;
+    this._speedChanged = false;
+    this._behindFirstDetected = null;
+
+    // Restore normal playback rate if we changed it
+    if (this._speedChanged) {
+      const ctrl = await getController();
+      if (ctrl) {
+        try { await ctrl.setRate(1.0); } catch {}
+      }
+      this._speedChanged = false;
     }
   }
 
-  // ─── Hub state received ───────────────────────────────────────────────────
+  // ─── Hub state received ────────────────────────────────────────────────────
 
   private _onHubState(data: any) {
     const now = Date.now();
-    const rtt = data.ts ? (now - data.ts) : (this.latency * 2);
-    this.latency = Math.max(0, rtt / 2);
+    let position: number = data.position ?? 0;
+    const paused: boolean = data.paused ?? true;
+    const setBy: string = data.setBy ?? "";
+    const doSeek: boolean = data.doSeek ?? false;
 
-    // Compensate for transit time if playing
-    let position = data.position ?? 0;
-    if (!data.paused && data.ts) {
-      position += this.latency / 1000;
+    // Compensate for message transit time (Syncplay's messageAge)
+    // Hub stamps ts when it receives state; we add transit time to position
+    const messageAge = data.ts ? Math.max(0, (now - data.ts) / 1000) : 0;
+    if (!paused) position += messageAge;
+
+    const prevGlobalPaused = this._globalPaused;
+    this._globalPosition = position;
+    this._globalPaused = paused;
+    this._lastGlobalUpdate = now;
+
+    // Don't apply our own state back to ourselves
+    if (setBy === this.username) return;
+
+    // Update peer tracking
+    if (setBy) {
+      this.peers.set(setBy, { username: setBy, position, paused, updatedAt: now });
+      this._notifyPeers();
     }
 
-    const prev = this.hubState;
-    this.hubState = {
-      position,
-      paused: data.paused ?? true,
-      setBy: data.setBy ?? "",
-      ts: now,
-    };
-
-    // Don't apply our own state back
-    if (data.setBy === this.username) return;
-
-    this._applyHubState(this.hubState, prev);
-    this.onHubEvent?.("state", this.hubState);
+    // Apply the global state to local player
+    this._changePlayerStateAccordingToGlobalState(position, paused, doSeek, setBy, prevGlobalPaused);
   }
 
-  private async _applyHubState(state: HubState, prev: HubState | null) {
+  // Core sync function — mirrors Syncplay's _changePlayerStateAccordingToGlobalState
+  private async _changePlayerStateAccordingToGlobalState(
+    position: number,
+    paused: boolean,
+    doSeek: boolean,
+    setBy: string,
+    prevGlobalPaused: boolean,
+  ) {
     const ctrl = await getController();
     if (!ctrl) return;
 
     const status = await ctrl.getStatus();
-    if (!status) return;
+    if (!status) {
+      // First state update — init player position
+      if (!this._lastPlayerUpdate) {
+        try {
+          await ctrl.seek(position);
+          await ctrl.setPaused(paused);
+          this._playerPosition = position;
+          this._playerPaused = paused;
+          this._lastPlayerUpdate = Date.now();
+        } catch {}
+      }
+      return;
+    }
 
     const now = Date.now();
+    const playerPos = this.getPlayerPosition();
+    const diff = playerPos - position; // positive = we are ahead, negative = we are behind
+    const pauseChanged = paused !== prevGlobalPaused || paused !== this.getPlayerPaused();
 
-    // ── Pause/unpause (Syncplay double-condition check) ────────────────────
-    // Only apply if BOTH: hub says pause changed AND local state doesn't match
-    const hubPauseChanged = !prev || state.paused !== prev.paused;
-    const localMismatch = status.paused !== state.paused;
-
-    if (hubPauseChanged && localMismatch) {
-      if (now - this.lastPauseCommandAt > PAUSE_DEBOUNCE) {
-        console.log(`[sync] Applying remote ${state.paused ? "pause" : "play"} by ${state.setBy}`);
-        await ctrl.setPaused(state.paused);
-        this.lastPauseCommandAt = now;
-        this.lastLocalPaused = state.paused;
+    // ── 1. doSeek: explicit seek from remote ──────────────────────────────
+    if (doSeek) {
+      if (setBy !== this.username) {
+        console.log(`[sync] Remote seek by ${setBy} → ${position.toFixed(2)}s`);
+        try {
+          await ctrl.seek(position);
+          this._lastSeekAt = now;
+          // Restore rate if we were slowing down
+          if (this._speedChanged) {
+            await ctrl.setRate(1.0);
+            this._speedChanged = false;
+          }
+        } catch {}
       }
     }
 
-    // ── Seek/drift correction (clients only, host is authoritative) ────────
-    if (this.isHost) return;
-    if (now - this.lastSeekAt < SEEK_COOLDOWN) return;
-    if (state.paused) return; // Don't correct drift while paused
-
-    const drift = state.position - status.position; // positive = we're behind
-
-    if (Math.abs(drift) > FASTFORWARD_THRESHOLD || Math.abs(drift) > REWIND_THRESHOLD) {
-      // Hard seek correction
-      console.log(`[sync] Hard seek: drift=${drift.toFixed(2)}s → seeking to ${state.position.toFixed(2)}s`);
-      await ctrl.seek(state.position);
-      this.lastSeekAt = now;
-      if (this.isSlowedDown) {
-        try { (ctrl as any).setRate?.(1.0); } catch {}
-        this.isSlowedDown = false;
+    // ── 2. Rewind: we are too far ahead ───────────────────────────────────
+    else if (diff > REWIND_THRESHOLD) {
+      if (setBy !== this.username) {
+        console.log(`[sync] Rewind: we are ${diff.toFixed(2)}s ahead of ${setBy} → seeking to ${position.toFixed(2)}s`);
+        try {
+          await ctrl.seek(position);
+          this._lastSeekAt = now;
+          if (this._speedChanged) {
+            await ctrl.setRate(1.0);
+            this._speedChanged = false;
+          }
+        } catch {}
       }
-    } else if (Math.abs(drift) > SLOWDOWN_THRESHOLD && !this.isSlowedDown) {
-      // Soft correction: slow down or speed up
-      const rate = drift > 0 ? 1.2 : SLOWDOWN_RATE; // speed up if behind, slow down if ahead
-      console.log(`[sync] Soft correction: drift=${drift.toFixed(2)}s, rate=${rate}`);
-      try { (ctrl as any).setRate?.(rate); } catch {}
-      this.isSlowedDown = true;
-    } else if (Math.abs(drift) < 0.1 && this.isSlowedDown) {
-      // Back in sync — restore rate
-      try { (ctrl as any).setRate?.(1.0); } catch {}
-      this.isSlowedDown = false;
+    }
+
+    // ── 3. Fast forward: we are too far behind ────────────────────────────
+    else if (diff < (FASTFORWARD_BEHIND_THRESHOLD * -1) && !doSeek) {
+      if (this._behindFirstDetected === null) {
+        this._behindFirstDetected = now;
+      } else {
+        const durationBehind = (now - this._behindFirstDetected) / 1000;
+        if (
+          durationBehind > (FASTFORWARD_THRESHOLD - FASTFORWARD_BEHIND_THRESHOLD) &&
+          diff < (FASTFORWARD_THRESHOLD * -1)
+        ) {
+          if (setBy !== this.username) {
+            const target = position + FASTFORWARD_EXTRA_TIME;
+            console.log(`[sync] Fast forward: we are ${Math.abs(diff).toFixed(2)}s behind → seeking to ${target.toFixed(2)}s`);
+            try {
+              await ctrl.seek(target);
+              this._lastSeekAt = now;
+              this._behindFirstDetected = now + FASTFORWARD_RESET_THRESHOLD * 1000;
+              if (this._speedChanged) {
+                await ctrl.setRate(1.0);
+                this._speedChanged = false;
+              }
+            } catch {}
+          }
+        }
+      }
+    } else {
+      this._behindFirstDetected = null;
+    }
+
+    // ── 4. Slow down: small drift correction via rate ─────────────────────
+    if (!doSeek && !paused) {
+      await this._slowDownToCoverTimeDifference(diff, setBy);
+    }
+
+    // ── 5. Apply pause/unpause ────────────────────────────────────────────
+    if (pauseChanged) {
+      if (now - this._lastPauseCommandAt > PAUSE_DEBOUNCE) {
+        if (paused) {
+          // SYNC_ON_PAUSE: seek to global position when pausing
+          if (SYNC_ON_PAUSE && setBy !== this.username) {
+            try { await ctrl.seek(position); } catch {}
+          }
+          console.log(`[sync] Remote pause by ${setBy} at ${position.toFixed(2)}s`);
+          try {
+            await ctrl.setPaused(true);
+            this._lastPauseCommandAt = now;
+          } catch {}
+        } else {
+          console.log(`[sync] Remote unpause by ${setBy}`);
+          try {
+            await ctrl.setPaused(false);
+            this._lastPauseCommandAt = now;
+          } catch {}
+        }
+      }
     }
   }
 
-  // ─── Polling ──────────────────────────────────────────────────────────────
+  // Slow down / speed up to cover small time difference (Syncplay's _slowDownToCoverTimeDifference)
+  private async _slowDownToCoverTimeDifference(diff: number, setBy: string) {
+    if (setBy === this.username) return;
+    const ctrl = await getController();
+    if (!ctrl) return;
+
+    const absDiff = Math.abs(diff);
+    if (absDiff > SLOWDOWN_KICKIN_THRESHOLD && !this._speedChanged) {
+      console.log(`[sync] Slowing down: drift=${diff.toFixed(2)}s`);
+      try {
+        await ctrl.setRate(SLOWDOWN_RATE);
+        this._speedChanged = true;
+      } catch {}
+    } else if (this._speedChanged && absDiff < SLOWDOWN_RESET_THRESHOLD) {
+      console.log(`[sync] Restoring normal rate: drift=${diff.toFixed(2)}s`);
+      try {
+        await ctrl.setRate(1.0);
+        this._speedChanged = false;
+      } catch {}
+    }
+  }
+
+  // ─── Local player polling ─────────────────────────────────────────────────
+  // Syncplay polls every 100ms (PLAYER_ASK_DELAY = 0.1s)
 
   private _startPolling() {
     this._stopPolling();
-    this.pollTimer = setInterval(() => this._poll(), PLAYER_POLL_INTERVAL);
+    this.pollTimer = setInterval(() => this._poll(), PLAYER_ASK_DELAY * 1000);
   }
 
   private _stopPolling() {
@@ -254,38 +408,50 @@ export class SyncEngine {
     if (!status) return;
 
     const now = Date.now();
-    const prevPaused = this.lastLocalPaused;
-    const prevPosition = this.lastLocalPosition;
+    const prevPaused = this._lastPlayerUpdate ? this._playerPaused : null;
+    const prevPosition = this._playerPosition;
 
-    // Detect local pause/unpause — broadcast immediately
+    this._playerPosition = status.position;
+    this._playerPaused = status.paused;
+    this._lastPlayerUpdate = now;
+
+    // Emit status to UI clients
+    this.io.emit("sync-status", {
+      position: status.position,
+      paused: status.paused,
+      playerConnected: true,
+    });
+
+    // Detect local pause change → broadcast immediately
     if (prevPaused !== null && prevPaused !== status.paused) {
-      if (now - this.lastPauseCommandAt > PAUSE_DEBOUNCE) {
-        console.log(`[sync] Local ${status.paused ? "pause" : "play"} — broadcasting`);
-        this.lastPauseCommandAt = now;
-        this._broadcastState(status.position, status.paused);
+      if (now - this._lastPauseCommandAt > PAUSE_DEBOUNCE) {
+        console.log(`[sync] Local ${status.paused ? "pause" : "play"} detected — broadcasting`);
+        this._lastPauseCommandAt = now;
+        this._broadcastState(status.position, status.paused, false);
       }
     }
 
-    // Detect local seek — position jump larger than expected for poll interval
-    const expectedDelta = (PLAYER_POLL_INTERVAL / 1000) * 1.5;
-    const actualDelta = Math.abs(status.position - prevPosition);
-    if (prevPaused === false && actualDelta > expectedDelta + 1.0) {
-      if (now - this.lastSeekAt > SEEK_COOLDOWN) {
-        console.log(`[sync] Local seek detected: ${prevPosition.toFixed(2)} → ${status.position.toFixed(2)}`);
-        this.lastSeekAt = now;
-        this._broadcastState(status.position, status.paused);
+    // Detect local seek (Syncplay's double-condition: diff > threshold vs BOTH player AND global)
+    // playerDiff > SEEK_THRESHOLD AND globalDiff > SEEK_THRESHOLD
+    if (prevPaused !== null) {
+      const expectedDelta = PLAYER_ASK_DELAY * 1.5;
+      const actualDelta = Math.abs(status.position - prevPosition);
+      const wasPlaying = !status.paused;
+      if (wasPlaying && actualDelta > expectedDelta + SEEK_THRESHOLD) {
+        // Also check against global to avoid false positives on correction seeks
+        const globalDiff = Math.abs(this.getGlobalPosition() - status.position);
+        if (globalDiff > SEEK_THRESHOLD) {
+          if (now - this._lastSeekAt > 1500) {
+            console.log(`[sync] Local seek detected: ${prevPosition.toFixed(2)} → ${status.position.toFixed(2)}`);
+            this._lastSeekAt = now;
+            this._broadcastState(status.position, status.paused, true);
+          }
+        }
       }
     }
-
-    this.lastLocalPosition = status.position;
-    this.lastLocalPaused = status.paused;
-    this.lastLocalTs = now;
-
-    // Forward to UI
-    this.io.emit("sync-status", { position: status.position, paused: status.paused });
   }
 
-  // ─── Broadcasting ────────────────────────────────────────────────────────
+  // ─── Broadcasting ─────────────────────────────────────────────────────────
 
   private _startBroadcasting() {
     this._stopBroadcasting();
@@ -296,38 +462,42 @@ export class SyncEngine {
       const status = await ctrl.getStatus();
       if (!status) return;
       const now = Date.now();
-      if (now - this.lastBroadcastAt < POSITION_BROADCAST_INTERVAL) return;
-      this.lastBroadcastAt = now;
-      this._broadcastState(status.position, status.paused);
-    }, POSITION_BROADCAST_INTERVAL);
+      if (now - this._lastBroadcastAt < BROADCAST_INTERVAL) return;
+      this._lastBroadcastAt = now;
+      this._broadcastState(status.position, status.paused, false);
+    }, BROADCAST_INTERVAL);
   }
 
   private _stopBroadcasting() {
     if (this.broadcastTimer) { clearInterval(this.broadcastTimer); this.broadcastTimer = null; }
   }
 
-  private _broadcastState(position: number, paused: boolean) {
+  private _broadcastState(position: number, paused: boolean, doSeek: boolean) {
     if (!this.active || !this.socket?.connected) return;
-    this.socket.emit("state", {
+    const state: any = {
       roomId: this.room,
       position,
       paused,
       setBy: this.username,
       ts: Date.now(),
-    });
+    };
+    if (doSeek) state.doSeek = true;
+    this.socket.emit("state", state);
+    this._lastBroadcastAt = Date.now();
   }
 
   private _notifyPeers() {
-    this.onPeersChange?.([...this.peers.values()]);
     this.io.emit("sync-peers", [...this.peers.values()]);
   }
 }
 
-// Singleton
+// ─── Singleton ────────────────────────────────────────────────────────────────
+
 let _engine: SyncEngine | null = null;
+
 export function getSyncEngine(io?: SocketIOServer): SyncEngine {
   if (!_engine) {
-    if (!io) throw new Error("SyncEngine not initialized");
+    if (!io) throw new Error("SyncEngine not initialized — pass io on first call");
     _engine = new SyncEngine(io);
   }
   return _engine;

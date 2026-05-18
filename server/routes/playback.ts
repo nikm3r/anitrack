@@ -93,6 +93,8 @@ function findPlayer(): {
 
   const ipcSocket = MpvController.getSocketPath();
 
+  const isMac = process.platform === "darwin";
+
   const mpvArgs = (f: string, forSync: boolean) => {
     const args = ["--no-terminal", "--force-window=yes", `--input-ipc-server=${ipcSocket}`];
     if (forSync) args.push("--pause");
@@ -100,35 +102,43 @@ function findPlayer(): {
     return args;
   };
 
-  // FIX: Generate VLC port once here and capture it in the closure.
-  //      Previously the port was embedded in the args string and then
-  //      re-parsed via regex (error-prone if path/title contained port="NNNN").
-  const vlcPort = 4123; // Fixed port matching syncwatch.lua default
-  // Build the lua-config exactly as syncplay does on Windows:
-  // modulepath with escaped quotes, port with escaped quotes, lua-config last.
-  const vlcExeDir = (() => {
-    if (customPath && fs.existsSync(customPath) && fs.statSync(customPath).isFile()) {
-      return path.dirname(customPath).replace(/\\/g, "/");
-    }
-    return ((process.env["ProgramFiles"] || "C:\\Program Files") + "\\VideoLAN\\VLC").replace(/\\/g, "/");
-  })();
-  const vlcModulePath = `${vlcExeDir}/lua/intf/modules/?.luac`;
+  // VLC port — fixed at 4123 to match syncwatch.lua default
+  // (--lua-config port parsing fails on Mac so we use a fixed port)
+  const vlcPort = 4123;
 
   const vlcArgs = (f: string, forSync: boolean) => {
-    // Match syncplay args exactly. File is NOT passed as arg — we send it
-    // via load-file command through the lua interface after connecting.
+    // Base args — same as Syncplay's VLC_SLAVE_ARGS
     const args = [
       "--extraintf=luaintf",
       "--lua-intf=syncwatch",
       "--no-quiet",
       "--no-input-fast-seek",
     ];
-    // Always pass the file as an arg so it opens immediately.
-    // The lua interface will also send load-file after connecting, which is harmless.
-    if (forSync) args.push("--start-paused");
-    args.push(f);
+
+    // Sync mode: start paused so we control playback start
+    // Syncplay uses --play-and-pause + --start-time=0 for this
+    if (forSync) {
+      args.push("--play-and-pause");
+      args.push("--start-time=0");
+    }
+
+    // Platform-specific extra args (Syncplay's VLC_SLAVE_EXTRA_ARGS)
+    if (isMac) {
+      args.push("--verbose=2");
+      args.push("--no-file-logging");
+    } else {
+      args.push("--no-one-instance");
+      args.push("--no-one-instance-when-started-from-file");
+    }
+
+    // In sync mode, don't pass the file — we send it via load-file
+    // after the lua interface connects. This matches Syncplay's behaviour.
+    // In solo mode, just pass the file directly.
+    if (!forSync) args.push(f);
+
     return args;
   };
+
 
   if (customPath && fs.existsSync(customPath) && fs.statSync(customPath).isFile()) {
     const isVlc = customPath.toLowerCase().includes("vlc");
@@ -228,29 +238,39 @@ router.post("/launch", async (req: Request, res: Response) => {
   let proc: ChildProcess | null = null;
   try {
     if (player.type === "vlc") {
-      // Syncplay pattern: spawn with stderr piped so we can read it.
-      // We wait for "Hosting Syncplay interface on port" before connecting.
-      // On Windows syncplay uses stdio:pipe too; on others it reads stderr.
       const vlcArgsList = player.args(filePath, forSync);
       console.log(`[vlc] Spawning: ${player.exe} ${vlcArgsList.join(" ")}`);
+
       proc = spawn(player.exe, vlcArgsList, {
         detached: true,
         stdio: ["ignore", "ignore", "pipe"],
       });
 
-      // Log stderr to catch VLC errors
-      (proc as any).stderr?.on("data", (d: Buffer) => {
-        const line = d.toString().trim();
-        if (line) console.log(`[vlc stderr] ${line}`);
-        if (line.includes("Hosting SyncWatch") || line.includes("Hosting Syncplay") || line.includes("port")) {
+      let vlcReadySignalled = false;
+      const signalOnce = () => {
+        if (!vlcReadySignalled) {
+          vlcReadySignalled = true;
           signalVlcReady();
         }
-      });
-      (proc as any).stderr?.on("close", () => signalVlcReady());
-      proc.unref();
+      };
 
-      // Fallback: signal ready after 3s
-      setTimeout(() => signalVlcReady(), 3000);
+      // Watch stderr for the "Hosting SyncWatch interface" line
+      // Syncplay uses the same pattern — reads stderr to know VLC is ready
+      (proc as any).stderr?.on("data", (d: Buffer) => {
+        const lines = d.toString().split("\n");
+        for (const line of lines) {
+          const t = line.trim();
+          if (t) console.log(`[vlc] ${t}`);
+          if (t.includes("Hosting SyncWatch") || t.includes("Hosting Syncplay")) {
+            signalOnce();
+          }
+        }
+      });
+
+      // Fallback: Syncplay uses VLC_OPEN_MAX_WAIT_TIME = 20s
+      // We use 5s as a reasonable fallback
+      setTimeout(signalOnce, 5000);
+      proc.unref();
     } else {
       proc = spawn(player.exe, player.args(filePath, forSync), { detached: true, stdio: "ignore" });
       proc.unref();
@@ -265,7 +285,7 @@ router.post("/launch", async (req: Request, res: Response) => {
   }
 
   // FIX: Pass vlcPort directly from the player object — no more regex parsing from args string.
-  setActivePlayer(player.type, player.vlcPort, player.type === "vlc" ? filePath : undefined);
+  setActivePlayer(player.type, player.vlcPort, (player.type === "vlc" && forSync) ? filePath : undefined);
 
   session = {
     animeId, episode, filePath, forSync,

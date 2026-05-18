@@ -1,46 +1,48 @@
 --[[
   syncwatch.lua — VLC Lua interface for AniTrack SyncWatch
-  Installed automatically by AniTrack to VLC's lua/intf folder.
-  Launched via: --extraintf=luaintf --lua-intf=syncwatch
+  Based on Syncplay's syncplay.lua protocol.
+  
+  Install to VLC lua/intf folder. Launch via:
+    --extraintf=luaintf --lua-intf=syncwatch
+    
+  Protocol (line-delimited \n):
+  Commands from AniTrack:
+    .                        poll state (returns playstate + position)
+    set-position: <secs>     seek
+    set-playstate: playing   unpause
+    set-playstate: paused    pause
+    set-rate: <rate>         set playback rate
+    load-file: <path>        load a file
+    get-duration             get media duration
+    get-filepath             get current file path
+    get-filename             get current filename
+    close-vlc                quit VLC
 
-  Protocol (line-delimited, \n terminated):
-    Commands (AniTrack → VLC):
-      .                          → poll state
-      set-position: <secs>       → seek
-      set-playstate: playing     → play
-      set-playstate: paused      → pause
-      set-rate: <rate>           → set speed
-      load-file: <path>          → load file
-      get-duration               → get duration
-      get-filepath               → get filepath
-      close-vlc                  → quit VLC
-
-    Responses (VLC → AniTrack):
-      playstate: playing|paused|no-input
-      position: <secs>|no-input
-      duration: <secs>|no-input
-      filepath: <path>|no-input
-      filepath-change-notification
-      inputstate-change: input|no-input
-      load-file-attempted
+  Responses to AniTrack:
+    playstate: playing|paused|no-input
+    position: <secs>|no-input
+    duration: <secs>|no-input
+    filepath: <path>|no-input
+    filename: <name>|no-input
+    filepath-change-notification
+    inputstate-change: input|no-input
 ]]
 
-local host = "127.0.0.1"
+-- Default port — used if --lua-config parsing fails
 local port = 4123
+local host = "127.0.0.1"
 local running = true
-local loopsleepduration = 5000 -- microseconds per loop tick
-local noinput = "no-input"
+local LOOPSLEEP = 2000  -- microseconds
 
--- Parse port from config
+-- Try to read port from config (passed via --lua-config=syncwatch={port="XXXXX"})
 local function safe_tonumber(str)
     if str == nil then return nil end
-    str = tostring(str):gsub("[^0-9]", ".")
-    local s, i, d = str:match("^([+-]?)(%d*)%.?(%d*)$")
-    if not s or not i or not d then return nil end
+    local s, i, d = tostring(str):match("^([+-]?)(%d*)%.?(%d*)$")
+    if not s then return nil end
     if s == "-" then s = -1 else s = 1 end
-    if i == "" then i = "0" end
-    if d == nil or d == "" then d = "0" end
-    return s * (tonumber(i) + tonumber(d) / (10 ^ #d))
+    i = i == "" and 0 or tonumber(i)
+    d = (d == nil or d == "") and 0 or tonumber(d)
+    return s * (i + d / (10 ^ #tostring(d == 0 and "" or tostring(d))))
 end
 
 if config and config["port"] then
@@ -48,63 +50,75 @@ if config and config["port"] then
     if p and p > 0 then port = p end
 end
 
--- State tracking for change detection
-local old_filepath = nil
-local old_inputstate = nil
+vlc.msg.info("[AniTrack] syncwatch.lua starting on port " .. tostring(port))
 
-local function get_input()
+-- State tracking
+local oldFilepath = nil
+local oldInputState = nil
+
+local function getInput()
     return vlc.object.input()
 end
 
-local function get_playstate()
-    if get_input() then
-        return vlc.playlist.status()
-    end
-    return noinput
+local function getPlaystate()
+    local input = getInput()
+    if not input then return "no-input" end
+    local status = vlc.playlist.status()
+    return status or "no-input"
 end
 
-local function get_position()
-    local input = get_input()
-    if not input then return noinput end
+local function getPosition()
+    local input = getInput()
+    if not input then return "no-input" end
     local t = vlc.var.get(input, "time")
-    if t == nil then return noinput end
-    -- VLC 3+ returns microseconds, VLC 2 returns seconds
-    local vlcver = tonumber(vlc.misc.version():sub(1,1)) or 3
-    if vlcver >= 3 then
+    if t == nil then return "no-input" end
+    -- VLC 3+ uses microseconds, VLC 2 uses seconds
+    local ver = tonumber(vlc.misc.version():match("^(%d+)")) or 3
+    if ver >= 3 then
         return t / 1000000
     end
     return t
 end
 
-local function get_duration()
-    local input = get_input()
-    if not input then return noinput end
+local function getDuration()
+    local input = getInput()
+    if not input then return "no-input" end
     local item = vlc.input.item()
-    if not item then return noinput end
+    if not item then return "no-input" end
     local d = item:duration()
-    if not d or d < 0 then return noinput end
+    if not d or d < 0 then return "no-input" end
     return d
 end
 
-local function get_filepath()
-    local input = get_input()
-    if not input then return noinput end
+local function getFilepath()
+    local input = getInput()
+    if not input then return "no-input" end
     local item = vlc.input.item()
-    if not item then return noinput end
+    if not item then return "no-input" end
     local uri = item:uri()
-    if uri and uri:find("file://") then
-        return vlc.strings.decode_uri(uri)
+    if not uri then return "no-input" end
+    if uri:find("^file://") then
+        return vlc.strings.decode_uri(uri:gsub("^file://", ""))
     end
-    return uri or noinput
+    return uri
 end
 
-local function set_position(secs)
-    local input = get_input()
-    if not input then return noinput end
-    local vlcver = tonumber(vlc.misc.version():sub(1,1)) or 3
-    local val = safe_tonumber(secs)
+local function getFilename()
+    local input = getInput()
+    if not input then return "no-input" end
+    local item = vlc.input.item()
+    if not item then return "no-input" end
+    local name = item:name()
+    return name or "no-input"
+end
+
+local function setPosition(secs)
+    local input = getInput()
+    if not input then return "no-input" end
+    local val = tonumber(tostring(secs):gsub(",", "."))
     if not val then return "bad-argument" end
-    if vlcver >= 3 then
+    local ver = tonumber(vlc.misc.version():match("^(%d+)")) or 3
+    if ver >= 3 then
         vlc.var.set(input, "time", val * 1000000)
     else
         vlc.var.set(input, "time", val)
@@ -112,9 +126,9 @@ local function set_position(secs)
     return nil
 end
 
-local function set_playstate(state)
-    local input = get_input()
-    if not input then return noinput end
+local function setPlaystate(state)
+    local input = getInput()
+    if not input then return "no-input" end
     local current = vlc.playlist.status()
     if state == "playing" and current ~= "playing" then
         vlc.playlist.pause()
@@ -124,66 +138,72 @@ local function set_playstate(state)
     return nil
 end
 
-local function load_file(filepath)
-    if not filepath or filepath == "" then return "bad-argument" end
-    local uri = vlc.strings.make_uri(filepath)
-    vlc.playlist.add({{path=uri}})
+local function setRate(rate)
+    local input = getInput()
+    if not input then return "no-input" end
+    local val = tonumber(tostring(rate):gsub(",", "."))
+    if val then
+        vlc.var.set(input, "rate", val)
+    end
+    return nil
+end
+
+local function loadFile(path)
+    if not path or path == "" then return "bad-argument" end
+    local uri = vlc.strings.make_uri(path)
+    vlc.playlist.add({{path = uri}})
     return "load-file-attempted\n"
 end
 
 local function poll()
     local out = ""
-    local input = get_input()
-    local new_inputstate = input and "input" or noinput
+    local input = getInput()
+    local newInputState = input and "input" or "no-input"
 
-    -- filepath change detection
+    -- Detect filepath change
     if input then
-        local fp = get_filepath()
-        if fp ~= old_filepath then
-            old_filepath = fp
+        local fp = getFilepath()
+        if fp ~= oldFilepath then
+            oldFilepath = fp
             out = out .. "filepath-change-notification\n"
         end
     end
 
-    -- inputstate change detection
-    if new_inputstate ~= old_inputstate then
-        old_inputstate = new_inputstate
-        out = out .. "inputstate-change: " .. new_inputstate .. "\n"
+    -- Detect input state change
+    if newInputState ~= oldInputState then
+        oldInputState = newInputState
+        out = out .. "inputstate-change: " .. newInputState .. "\n"
     end
 
-    -- always send playstate and position
-    local ps = get_playstate()
-    local pos = get_position()
-    out = out .. "playstate: " .. tostring(ps) .. "\n"
-    out = out .. "position: " .. tostring(pos) .. "\n"
+    -- Always send playstate and position
+    out = out .. "playstate: " .. getPlaystate() .. "\n"
+    out = out .. "position: " .. tostring(getPosition()) .. "\n"
 
     return out
 end
 
-local function do_command(cmd, arg)
+local function doCommand(cmd, arg)
     if cmd == "." then
         return poll()
     elseif cmd == "get-duration" then
-        return "duration: " .. tostring(get_duration()) .. "\n"
+        return "duration: " .. tostring(getDuration()) .. "\n"
     elseif cmd == "get-filepath" then
-        return "filepath: " .. tostring(get_filepath()) .. "\n"
+        return "filepath: " .. tostring(getFilepath()) .. "\n"
+    elseif cmd == "get-filename" then
+        return "filename: " .. tostring(getFilename()) .. "\n"
     elseif cmd == "set-position" then
-        local err = set_position(arg)
+        local err = setPosition(arg)
         if err then return "set-position-error: " .. err .. "\n" end
         return ""
     elseif cmd == "set-playstate" then
-        local err = set_playstate(arg)
+        local err = setPlaystate(arg)
         if err then return "set-playstate-error: " .. err .. "\n" end
         return ""
     elseif cmd == "set-rate" then
-        local input = get_input()
-        if input then
-            local r = safe_tonumber(arg)
-            if r then vlc.var.set(input, "rate", r) end
-        end
+        setRate(arg)
         return ""
     elseif cmd == "load-file" then
-        return load_file(arg) or ""
+        return loadFile(arg) or ""
     elseif cmd == "close-vlc" then
         running = false
         vlc.misc.quit()
@@ -194,46 +214,40 @@ local function do_command(cmd, arg)
 end
 
 -- Start TCP server
-vlc.msg.info("[AniTrack] syncwatch.lua starting on port " .. port)
 local server = vlc.net.listen_tcp(host, port)
-vlc.msg.info("[AniTrack] Hosting SyncWatch interface on port: " .. port)
+vlc.msg.info("[AniTrack] Hosting SyncWatch interface on port: " .. tostring(port))
 
 while running do
     local fd = server:accept()
-    local inbuf = ""
-
-    while fd >= 0 and running do
-        local data = vlc.net.recv(fd, 4096)
-        if data == nil then break end
-
-        inbuf = inbuf .. data:gsub("\r", "")
-        local outbuf = ""
-
-        while true do
-            local nl = inbuf:find("\n")
-            if not nl then break end
-            local line = inbuf:sub(1, nl - 1)
-            inbuf = inbuf:sub(nl + 1)
-
-            local cmd, arg
-            local sep = line:find(": ")
-            if sep then
-                cmd = line:sub(1, sep - 1)
-                arg = line:sub(sep + 2)
-            else
-                cmd = line
-                arg = ""
+    if fd >= 0 then
+        local inbuf = ""
+        while fd >= 0 and running do
+            local data = vlc.net.recv(fd, 4096)
+            if data == nil then break end
+            inbuf = inbuf .. data:gsub("\r", "")
+            local outbuf = ""
+            while true do
+                local nl = inbuf:find("\n")
+                if not nl then break end
+                local line = inbuf:sub(1, nl - 1)
+                inbuf = inbuf:sub(nl + 1)
+                if line ~= "" then
+                    local sep = line:find(": ")
+                    local cmd, arg
+                    if sep then
+                        cmd = line:sub(1, sep - 1)
+                        arg = line:sub(sep + 2)
+                    else
+                        cmd = line
+                        arg = ""
+                    end
+                    outbuf = outbuf .. doCommand(cmd, arg)
+                end
             end
-
-            if cmd ~= "" then
-                outbuf = outbuf .. do_command(cmd, arg)
+            if outbuf ~= "" then
+                vlc.net.send(fd, outbuf)
             end
+            vlc.misc.mwait(vlc.misc.mdate() + LOOPSLEEP)
         end
-
-        if outbuf ~= "" then
-            vlc.net.send(fd, outbuf)
-        end
-
-        vlc.misc.mwait(vlc.misc.mdate() + loopsleepduration)
     end
 end
